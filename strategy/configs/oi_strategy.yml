@@ -1,0 +1,9 @@
+default:
+  color_thresholds:
+    "3m": 10
+    "5m": 12
+    "10m": 15
+    "15m": 20
+    "30m": 30
+    "180m": 100
+  alert_sound: "alert.mp3"

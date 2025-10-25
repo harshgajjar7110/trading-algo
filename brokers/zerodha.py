@@ -244,6 +244,9 @@ class ZerodhaBroker(BrokerBase):
     
     def get_instruments(self):
         return self.instruments_df
+
+    def historical_data(self, instrument_token, from_date, to_date, interval, continuous=False, oi=False):
+        return self.kite.historical_data(instrument_token, from_date, to_date, interval, continuous, oi)
     
     def connect_websocket(self):
         self.kite_ws.on_ticks = self.on_ticks

@@ -15,4 +15,9 @@ dependencies = [
     "ratelimit>=2.2.1",
     "requests>=2.31.0",
     "pygame>=2.5.2",
+    "backtrader>=1.9.78.123",
+    "requests>=2.31.0",
+    "pyotp>=2.9.0",
+    "python-dotenv>=1.0.0",
+    "kiteconnect>=5.0.1",
 ]

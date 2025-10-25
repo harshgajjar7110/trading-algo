@@ -33,6 +33,7 @@ class SurvivorBacktest(bt.Strategy):
             self.log(f'SELL PE Signal @ {self.datas[0].datetime.date(0)}: Price {current_price}')
             self.pe_signals += 1
             self.pe_reset_gap_flag = 1
+            self.buy()
 
         # CE trade logic
         price_diff_ce = round(self.nifty_ce_last_value - current_price, 0)
@@ -42,13 +43,16 @@ class SurvivorBacktest(bt.Strategy):
             self.log(f'SELL CE Signal @ {self.datas[0].datetime.date(0)}: Price {current_price}')
             self.ce_signals += 1
             self.ce_reset_gap_flag = 1
+            self.sell()
 
         # Reset logic
         if (self.nifty_pe_last_value - current_price) > self.p.pe_reset_gap and self.pe_reset_gap_flag:
             self.nifty_pe_last_value = current_price + self.p.pe_reset_gap
+            self.close()
 
         if (current_price - self.nifty_ce_last_value) > self.p.ce_reset_gap and self.ce_reset_gap_flag:
             self.nifty_ce_last_value = current_price - self.p.ce_reset_gap
+            self.close()
 
     def log(self, txt, dt=None):
         ''' Logging function for this strategy'''
@@ -86,14 +90,35 @@ if __name__ == '__main__':
                             pe_reset_gap=config['pe_reset_gap'],
                             ce_reset_gap=config['ce_reset_gap'])
 
+        cerebro.addanalyzer(bt.analyzers.TradeAnalyzer, _name='trade_analyzer')
+
         print('Starting Portfolio Value: %.2f' % cerebro.broker.getvalue())
 
         results = cerebro.run()
 
         print('Final Portfolio Value: %.2f' % cerebro.broker.getvalue())
 
+        trade_analyzer = results[0].analyzers.trade_analyzer.get_analysis()
+
+        if trade_analyzer.total.total > 0:
+            print("\n--- Trade Analysis ---")
+            for i, (trade_id, trade) in enumerate(trade_analyzer.trades.items()):
+                print(f"\nTrade {i+1}:")
+                print(f"  - Status: {'Open' if trade.isopen else 'Closed'}")
+                print(f"  - Entry Date: {trade.open_datetime}")
+                if not trade.isopen:
+                    print(f"  - Exit Date: {trade.close_datetime}")
+                print(f"  - PnL: {trade.pnl:.2f}")
+
+                initial_value = trade.price * trade.size
+                if initial_value != 0:
+                    roi = (trade.pnl / initial_value) * 100
+                    print(f"  - ROI: {roi:.2f}%")
+                else:
+                    print("  - ROI: N/A (no initial value)")
+
         strat = results[0]
-        print(f"PE Signals: {strat.pe_signals}")
+        print(f"\nPE Signals: {strat.pe_signals}")
         print(f"CE Signals: {strat.ce_signals}")
 
     else:

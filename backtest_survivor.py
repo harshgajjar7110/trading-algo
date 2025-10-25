@@ -57,7 +57,7 @@ class SurvivorBacktest(bt.Strategy):
 
 if __name__ == '__main__':
     cerebro = bt.Cerebro()
-    cerebro.broker.setcash(100000.0)
+    cerebro.broker.setcash(600000.0)
 
     config_file = os.path.join(os.path.dirname(__file__), "strategy/configs/survivor.yml")
     with open(config_file, 'r') as f:
@@ -68,7 +68,7 @@ if __name__ == '__main__':
     # Fetch historical data
     instrument_token = 256265 # NIFTY 50
     to_date = datetime.now().date()
-    from_date = to_date - timedelta(days=90)
+    from_date = to_date - timedelta(days=40)
 
     historical_data = broker.historical_data(instrument_token, from_date, to_date, "minute")
 
@@ -77,7 +77,7 @@ if __name__ == '__main__':
         df['date'] = pd.to_datetime(df['date'])
         df = df.set_index('date')
 
-        data = bt.feeds.PandasData(datanam=df)
+        data = bt.feeds.PandasData(dataname=df)
 
         cerebro.adddata(data)
         cerebro.addstrategy(SurvivorBacktest,

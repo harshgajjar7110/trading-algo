@@ -28,31 +28,35 @@ class SurvivorBacktest(bt.Strategy):
         # PE trade logic
         price_diff_pe = round(current_price - self.nifty_pe_last_value, 0)
         if price_diff_pe > self.p.pe_gap:
-            sell_multiplier = int(price_diff_pe / self.p.pe_gap)
-            self.nifty_pe_last_value += self.p.pe_gap * sell_multiplier
-            self.log(f'SELL PE Signal @ {self.datas[0].datetime.date(0)}: Price {current_price}')
-            self.pe_signals += 1
-            self.pe_reset_gap_flag = 1
-            self.buy()
+            if not self.position:
+                sell_multiplier = int(price_diff_pe / self.p.pe_gap)
+                self.nifty_pe_last_value += self.p.pe_gap * sell_multiplier
+                self.log(f'SELL PE Signal @ {self.datas[0].datetime.date(0)}: Price {current_price}')
+                self.pe_signals += 1
+                self.pe_reset_gap_flag = 1
+                self.buy()
 
         # CE trade logic
         price_diff_ce = round(self.nifty_ce_last_value - current_price, 0)
         if price_diff_ce > self.p.ce_gap:
-            sell_multiplier = int(price_diff_ce / self.p.ce_gap)
-            self.nifty_ce_last_value -= self.p.ce_gap * sell_multiplier
-            self.log(f'SELL CE Signal @ {self.datas[0].datetime.date(0)}: Price {current_price}')
-            self.ce_signals += 1
-            self.ce_reset_gap_flag = 1
-            self.sell()
+            if not self.position:
+                sell_multiplier = int(price_diff_ce / self.p.ce_gap)
+                self.nifty_ce_last_value -= self.p.ce_gap * sell_multiplier
+                self.log(f'SELL CE Signal @ {self.datas[0].datetime.date(0)}: Price {current_price}')
+                self.ce_signals += 1
+                self.ce_reset_gap_flag = 1
+                self.sell()
 
         # Reset logic
         if (self.nifty_pe_last_value - current_price) > self.p.pe_reset_gap and self.pe_reset_gap_flag:
-            self.nifty_pe_last_value = current_price + self.p.pe_reset_gap
-            self.close()
+            if self.position:
+                self.nifty_pe_last_value = current_price + self.p.pe_reset_gap
+                self.close()
 
         if (current_price - self.nifty_ce_last_value) > self.p.ce_reset_gap and self.ce_reset_gap_flag:
-            self.nifty_ce_last_value = current_price - self.p.ce_reset_gap
-            self.close()
+            if self.position:
+                self.nifty_ce_last_value = current_price - self.p.ce_reset_gap
+                self.close()
 
     def log(self, txt, dt=None):
         ''' Logging function for this strategy'''
@@ -100,9 +104,10 @@ if __name__ == '__main__':
 
         trade_analyzer = results[0].analyzers.trade_analyzer.get_analysis()
 
-        if trade_analyzer.total.total > 0:
+        trades = trade_analyzer.get('trades', {})
+        if trades:
             print("\n--- Trade Analysis ---")
-            for i, (trade_id, trade) in enumerate(trade_analyzer.trades.items()):
+            for i, (trade_id, trade) in enumerate(trades.items()):
                 print(f"\nTrade {i+1}:")
                 print(f"  - Status: {'Open' if trade.isopen else 'Closed'}")
                 print(f"  - Entry Date: {trade.open_datetime}")

@@ -2,9 +2,42 @@ import os
 import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import yaml
+import asyncio
+import time
+from typing import Dict, Optional, Any
+import yaml  
 from logger import logger
 from brokers import BrokerGateway, OrderRequest, Exchange, OrderType, TransactionType, ProductType
+
+class QuoteManager:
+    """
+    Manages real-time option quotes with staleness checks.
+    """
+    def __init__(self, max_staleness_seconds: float = 5.0):
+        self._quotes: Dict[str, Dict[str, Any]] = {}
+        self.max_staleness = max_staleness_seconds
+
+    def update_quote(self, symbol: str, price: float):
+        """Update the cache with the latest price and timestamp."""
+        self._quotes[symbol] = {
+            'price': price,
+            'timestamp': time.time()
+        }
+
+    def get_price(self, symbol: str) -> Optional[float]:
+        """
+        Get the cached price if it's not stale.
+        Returns None if symbol not found or data is stale.
+        """
+        data = self._quotes.get(symbol)
+        if not data:
+            return None
+        
+        if time.time() - data['timestamp'] > self.max_staleness:
+            logger.warning(f"Quote for {symbol} is stale (> {self.max_staleness}s). Ignoring.")
+            return None
+            
+        return data['price']
 
 class SurvivorStrategy:
     """
@@ -78,6 +111,7 @@ class SurvivorStrategy:
     """
     
     def __init__(self, broker, config, order_tracker):
+        self.config = config
         # Assign config values as instance variables with 'strat_var_' prefix
         for k, v in config.items():
             setattr(self, f'strat_var_{k}', v)
@@ -98,9 +132,57 @@ class SurvivorStrategy:
         self._initialize_state()
         self.lot_size = self.instruments['lot_size'].iloc[0]
         
+        # Initialize QuoteManager and Async Lock
+        self.quote_manager = QuoteManager(max_staleness_seconds=5.0)
+        self.trade_lock = asyncio.Lock()
+        
         # Calculate and store strike difference for the option series
         self.strike_difference = self._get_strike_difference(self.symbol_initials)
         logger.info(f"Strike difference for {self.symbol_initials} is {self.strike_difference}")
+
+        # Subscribe to options around ATM
+        self._subscribe_to_options()
+
+    def _subscribe_to_options(self):
+        """
+        Subscribe to option strikes around the current ATM price.
+        Range: ATM +/- subscription_buffer (default 900)
+        """
+        try:
+            # Get current NIFTY price
+            current_quote = self._nifty_quote()
+            ltp = current_quote.last_price
+            
+            # Get buffer from config or default to 900
+            buffer = self.config.get('subscription_buffer', 900)
+            
+            lower_bound = ltp - buffer
+            upper_bound = ltp + buffer
+            
+            logger.info(f"Subscribing to options in range: {lower_bound} - {upper_bound} (Buffer: {buffer})")
+            
+            # Filter instruments within range
+            eligible_instruments = self.instruments[
+                (self.instruments['symbol'].str.contains(self.symbol_initials)) &
+                (self.instruments['segment'] == "NFO-OPT") &
+                (self.instruments['strike'] >= lower_bound) &
+                (self.instruments['strike'] <= upper_bound)
+            ]
+            
+            if eligible_instruments.empty:
+                logger.warning("No instruments found for subscription in the calculated range.")
+                return
+
+            # Extract symbols and prepend exchange
+            # Zerodha driver expects "EXCH:SYMBOL" format for string lookups
+            symbols = [f"{self.strat_var_exchange}:{s}" for s in eligible_instruments['symbol'].tolist()]
+            
+            # Subscribe via broker
+            self.broker.symbols_to_subscribe(symbols)
+            logger.info(f"Subscribed to {len(symbols)} option contracts.")
+            
+        except Exception as e:
+            logger.error(f"Failed to subscribe to options: {e}", exc_info=True)
 
     def _nifty_quote(self):
         symbol_code = self.strat_var_index_symbol
@@ -157,7 +239,7 @@ class SurvivorStrategy:
         self.strike_difference = abs(top2.iloc[1]['strike'] - top2.iloc[0]['strike'])
         return self.strike_difference
 
-    def on_ticks_update(self, ticks):
+    async def on_ticks_update(self, ticks):
         """
         Main strategy execution method called on each tick update
         
@@ -174,9 +256,13 @@ class SurvivorStrategy:
         """
         current_price = ticks['last_price'] if 'last_price' in ticks else ticks['ltp']
         
+        # Update QuoteManager if this is an option tick (has symbol)
+        if 'symbol' in ticks:
+            self.quote_manager.update_quote(ticks['symbol'], current_price)
+        
         # Process trading opportunities for both sides
-        self._handle_pe_trade(current_price)  # Handle Put option opportunities
-        self._handle_ce_trade(current_price)  # Handle Call option opportunities
+        await self._handle_pe_trade(current_price)  # Handle Put option opportunities
+        await self._handle_ce_trade(current_price)  # Handle Call option opportunities
         
         # Apply reset logic to adjust reference values
         self._reset_reference_values(current_price)
@@ -200,29 +286,9 @@ class SurvivorStrategy:
             return True
         return False
 
-    def _handle_pe_trade(self, current_price):
+    async def _handle_pe_trade(self, current_price):
         """
         Handle PE (Put) option trading logic
-        
-        Args:
-            current_price (float): Current NIFTY index price
-            
-        PE Trading Logic:
-        - Triggered when current_price > nifty_pe_last_value + pe_gap
-        - Sells PE options (benefits from upward price movement)
-        - Updates reference value after execution
-        
-        Process:
-        1. Check if upward movement exceeds gap threshold
-        2. Calculate sell multiplier based on gap magnitude
-        3. Validate multiplier doesn't breach risk limits
-        4. Find appropriate PE strike with adequate premium
-        5. Execute trade and update reference value
-        
-        Example:
-        - Reference: 24,500, Gap: 25, Current: 24,560
-        - Difference: 60, Multiplier: 60/25 = 2
-        - Sell 2x PE quantity, Update reference to 24,550
         """
         # No action needed if price hasn't moved up sufficiently
         if current_price <= self.nifty_pe_last_value:
@@ -232,74 +298,78 @@ class SurvivorStrategy:
         # Calculate price difference and check if it exceeds gap threshold
         price_diff = round(current_price - self.nifty_pe_last_value, 0)
         if price_diff > self.strat_var_pe_gap:
-            # Calculate multiplier for position sizing
-            sell_multiplier = int(price_diff / self.strat_var_pe_gap)
             
-            # Risk check: Ensure multiplier doesn't exceed threshold
-            if self._check_sell_multiplier_breach(sell_multiplier):
-                logger.warning(f"Sell multiplier {sell_multiplier} breached the threshold {self.strat_var_sell_multiplier_threshold}")
-                return
+            # CRITICAL SECTION: Acquire lock to prevent race conditions
+            async with self.trade_lock:
+                # Re-check condition inside lock in case it changed while waiting
+                if current_price <= self.nifty_pe_last_value:
+                    return
 
-            # Update reference value based on executed gaps
-            self.nifty_pe_last_value += self.strat_var_pe_gap * sell_multiplier
-            
-            # Calculate total quantity to trade
-            total_quantity = sell_multiplier * self.strat_var_pe_quantity
+                # Calculate multiplier for position sizing
+                sell_multiplier = int(price_diff / self.strat_var_pe_gap)
+                
+                # Risk check: Ensure multiplier doesn't exceed threshold
+                if self._check_sell_multiplier_breach(sell_multiplier):
+                    logger.warning(f"Sell multiplier {sell_multiplier} breached the threshold {self.strat_var_sell_multiplier_threshold}")
+                    return
 
-            # Find suitable PE option with adequate premium
-            temp_gap = self.strat_var_pe_symbol_gap
-            while True:
-                # Find PE instrument at specified gap from current price
-                instrument = self._find_nifty_symbol_from_gap("PE", current_price, gap=temp_gap)
-                if not instrument:
-                    logger.warning("No suitable instrument found for PE with gap %s", temp_gap)
-                    return 
+                # Update reference value based on executed gaps
+                self.nifty_pe_last_value += self.strat_var_pe_gap * sell_multiplier
                 
-                # Get current quote for the selected instrument
-                if ":" not in instrument['symbol']:
-                    symbol_code = self.strat_var_exchange + ":" + instrument['symbol']
-                else:
-                    symbol_code = instrument['symbol']
-                quote = self.broker.get_quote(symbol_code)
-                
-                # Check if premium meets minimum threshold
-                if quote.last_price < self.strat_var_min_price_to_sell:
-                    logger.info(f"Last price {quote.last_price} is less than min price to sell {self.strat_var_min_price_to_sell}")
-                    # Try closer strike if premium is too low
-                    temp_gap -= self.lot_size
-                    continue
+                # Calculate total quantity to trade
+                total_quantity = sell_multiplier * self.strat_var_pe_quantity
+
+                # Find suitable PE option with adequate premium
+                temp_gap = self.strat_var_pe_symbol_gap
+                max_attempts = 10
+                attempts = 0
+                while True:
+                    attempts += 1
+                    if attempts > max_attempts:
+                        logger.warning("Max attempts reached for PE trade strike selection")
+                        return
+
+                    # Find PE instrument at specified gap from current price
+                    instrument = self._find_nifty_symbol_from_gap("PE", current_price, gap=temp_gap)
+                    if not instrument:
+                        logger.warning("No suitable instrument found for PE with gap %s", temp_gap)
+                        return 
                     
-                # Execute the trade
-                logger.info(f"Execute PE sell @ {instrument['symbol']} × {total_quantity}, Market Price")
-                self._place_order(instrument['symbol'], total_quantity)
-                
-                # Set reset flag to enable reset logic
-                self.pe_reset_gap_flag = 1
-                break
+                    # Get current quote for the selected instrument
+                    if ":" not in instrument['symbol']:
+                        symbol_code = self.strat_var_exchange + ":" + instrument['symbol']
+                    else:
+                        symbol_code = instrument['symbol']
+                    
+                    # Try to get from cache first
+                    last_price = self.quote_manager.get_price(symbol_code)
+                    
+                    # If not in cache or stale, fetch from broker (blocking call wrapped in executor)
+                    if last_price is None:
+                        loop = asyncio.get_running_loop()
+                        quote = await loop.run_in_executor(None, self.broker.get_quote, symbol_code)
+                        last_price = quote.last_price
+                        # Update cache
+                        self.quote_manager.update_quote(symbol_code, last_price)
+                    
+                    # Check if premium meets minimum threshold
+                    if last_price < self.strat_var_min_price_to_sell:
+                        logger.info(f"Last price {last_price} is less than min price to sell {self.strat_var_min_price_to_sell}")
+                        # Try closer strike if premium is too low
+                        temp_gap -= self.lot_size
+                        continue
+                        
+                    # Execute the trade
+                    logger.info(f"Execute PE sell @ {instrument['symbol']} × {total_quantity}, Market Price")
+                    await self._place_order_async(instrument['symbol'], total_quantity)
+                    
+                    # Set reset flag to enable reset logic
+                    self.pe_reset_gap_flag = 1
+                    break
 
-    def _handle_ce_trade(self, current_price):
+    async def _handle_ce_trade(self, current_price):
         """
         Handle CE (Call) option trading logic
-        
-        Args:
-            current_price (float): Current NIFTY index price
-            
-        CE Trading Logic:
-        - Triggered when current_price < nifty_ce_last_value - ce_gap
-        - Sells CE options (benefits from downward price movement)
-        - Updates reference value after execution
-        
-        Process:
-        1. Check if downward movement exceeds gap threshold
-        2. Calculate sell multiplier based on gap magnitude
-        3. Validate multiplier doesn't breach risk limits
-        4. Find appropriate CE strike with adequate premium
-        5. Execute trade and update reference value
-        
-        Example:
-        - Reference: 24,500, Gap: 25, Current: 24,440
-        - Difference: 60, Multiplier: 60/25 = 2
-        - Sell 2x CE quantity, Update reference to 24,450
         """
         # No action needed if price hasn't moved down sufficiently
         if current_price >= self.nifty_ce_last_value:
@@ -309,49 +379,74 @@ class SurvivorStrategy:
         # Calculate price difference and check if it exceeds gap threshold
         price_diff = round(self.nifty_ce_last_value - current_price, 0)  
         if price_diff > self.strat_var_ce_gap:
-            # Calculate multiplier for position sizing
-            sell_multiplier = int(price_diff / self.strat_var_ce_gap)
             
-            # Risk check: Ensure multiplier doesn't exceed threshold
-            if self._check_sell_multiplier_breach(sell_multiplier):
-                logger.warning(f"Sell multiplier {sell_multiplier} breached the threshold {self.strat_var_sell_multiplier_threshold}")
-                return
-
-            # Update reference value based on executed gaps
-            self.nifty_ce_last_value -= self.strat_var_ce_gap * sell_multiplier
-            
-            # Calculate total quantity to trade
-            total_quantity = sell_multiplier * self.strat_var_ce_quantity
-
-            # Find suitable CE option with adequate premium
-            temp_gap = self.strat_var_ce_symbol_gap 
-            while True:
-                # Find CE instrument at specified gap from current price
-                instrument = self._find_nifty_symbol_from_gap("CE", current_price, gap=temp_gap)
-                if not instrument:
-                    logger.warning("No suitable instrument found for CE with gap %s", temp_gap)
+            # CRITICAL SECTION: Acquire lock to prevent race conditions
+            async with self.trade_lock:
+                # Re-check condition inside lock
+                if current_price >= self.nifty_ce_last_value:
                     return
-                    
-                # Get current quote for the selected instrument
-                if ":" not in instrument['symbol']:
-                    symbol_code = self.strat_var_exchange + ":" + instrument['symbol']
-                else:
-                    symbol_code = instrument['symbol']
-                quote = self.broker.get_quote(symbol_code)
-                # Check if premium meets minimum threshold
-                if quote.last_price < self.strat_var_min_price_to_sell:
-                    logger.info(f"Last price {quote.last_price} is less than min price to sell {self.strat_var_min_price_to_sell}, trying next strike")
-                    # Try closer strike if premium is too low
-                    temp_gap -= self.lot_size
-                    continue
-                    
-                # Execute the trade
-                logger.info(f"Execute CE sell @ {instrument['symbol']} × {total_quantity}, Market Price")
-                self._place_order(instrument['symbol'], total_quantity)
+
+                # Calculate multiplier for position sizing
+                sell_multiplier = int(price_diff / self.strat_var_ce_gap)
                 
-                # Set reset flag to enable reset logic
-                self.ce_reset_gap_flag = 1
-                break
+                # Risk check: Ensure multiplier doesn't exceed threshold
+                if self._check_sell_multiplier_breach(sell_multiplier):
+                    logger.warning(f"Sell multiplier {sell_multiplier} breached the threshold {self.strat_var_sell_multiplier_threshold}")
+                    return
+
+                # Update reference value based on executed gaps
+                self.nifty_ce_last_value -= self.strat_var_ce_gap * sell_multiplier
+                
+                # Calculate total quantity to trade
+                total_quantity = sell_multiplier * self.strat_var_ce_quantity
+
+                # Find suitable CE option with adequate premium
+                temp_gap = self.strat_var_ce_symbol_gap 
+                max_attempts = 10
+                attempts = 0
+                while True:
+                    attempts += 1
+                    if attempts > max_attempts:
+                        logger.warning("Max attempts reached for CE trade strike selection")
+                        return
+
+                    # Find CE instrument at specified gap from current price
+                    instrument = self._find_nifty_symbol_from_gap("CE", current_price, gap=temp_gap)
+                    if not instrument:
+                        logger.warning("No suitable instrument found for CE with gap %s", temp_gap)
+                        return
+                        
+                    # Get current quote for the selected instrument
+                    if ":" not in instrument['symbol']:
+                        symbol_code = self.strat_var_exchange + ":" + instrument['symbol']
+                    else:
+                        symbol_code = instrument['symbol']
+                    
+                    # Try to get from cache first
+                    last_price = self.quote_manager.get_price(symbol_code)
+                    
+                    # If not in cache or stale, fetch from broker
+                    if last_price is None:
+                        loop = asyncio.get_running_loop()
+                        quote = await loop.run_in_executor(None, self.broker.get_quote, symbol_code)
+                        last_price = quote.last_price
+                        # Update cache
+                        self.quote_manager.update_quote(symbol_code, last_price)
+
+                    # Check if premium meets minimum threshold
+                    if last_price < self.strat_var_min_price_to_sell:
+                        logger.info(f"Last price {last_price} is less than min price to sell {self.strat_var_min_price_to_sell}, trying next strike")
+                        # Try closer strike if premium is too low
+                        temp_gap -= self.lot_size
+                        continue
+                        
+                    # Execute the trade
+                    logger.info(f"Execute CE sell @ {instrument['symbol']} × {total_quantity}, Market Price")
+                    await self._place_order_async(instrument['symbol'], total_quantity)
+                    
+                    # Set reset flag to enable reset logic
+                    self.ce_reset_gap_flag = 1
+                    break
 
     def _reset_reference_values(self, current_price):
         """
@@ -495,6 +590,13 @@ class SurvivorStrategy:
                 temp_gap -= self.lot_size
             else:
                 return instrument
+
+    async def _place_order_async(self, symbol, quantity):
+        """
+        Async wrapper for order placement
+        """
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, self._place_order, symbol, quantity)
 
     def _place_order(self, symbol, quantity):
         """
@@ -1135,58 +1237,54 @@ PARAMETER GROUPS:
     # ==========================================================================
     # SECTION 7: MAIN TRADING LOOP
     # ==========================================================================
-    try:
-        while True:
-            try:
-                # STEP 1: Get market data from dispatcher queue
-                # This call blocks until new tick data arrives from websocket
-                tick_data = dispatcher._main_queue.get()
-                
-                # STEP 2: Extract the primary instrument data
-                # tick_data is a list, we process the first instrument
-                if isinstance(tick_data, list):
-                    symbol_data = tick_data[0]
-                else:
-                    symbol_data = tick_data
-                # STEP 3: Optional data simulation for testing
-                # You also need to move `tick_data = dispatcher._main_queue.get()` above 
-                # outside of the while loop for this to work
-                # if isinstance(symbol_data, dict) and ('last_price' in symbol_data or 'ltp' in symbol_data) :
-                #     if 'last_price' in symbol_data: 
-                #         original_price = symbol_data['last_price']
-                #         variation = random.uniform(-50, 50)  # ±50 point random variation
-                #         symbol_data['last_price'] += variation
-                #         logger.debug(f"Testing mode - Original: {original_price}, "
-                #                     f"Modified: {symbol_data['last_price']} (Δ{variation:+.1f})")
-                #     elif 'ltp' in symbol_data:
-                #         original_price = symbol_data['ltp']
-                #         variation = random.uniform(-50, 50)  # ±50 point random variation
-                #         symbol_data['ltp'] += variation
-                #         logger.debug(f"Testing mode - Original: {original_price}, "
-                #                     f"Modified: {symbol_data['ltp']} (Δ{variation:+.1f})")
-                
-                # STEP 4: Process tick through strategy
-                # This triggers the main strategy logic for PE/CE evaluation
-                if isinstance(symbol_data, dict) and ('last_price' in symbol_data or 'ltp' in symbol_data):
-                    strategy.on_ticks_update(symbol_data)
-                
-            except KeyboardInterrupt:
-                # Handle graceful shutdown on Ctrl+C
-                logger.info("SHUTDOWN REQUESTED - Stopping strategy...")
-                break
-                
-            except Exception as tick_error:
-                # Handle individual tick processing errors
-                logger.error(f"Error processing tick data: {tick_error}", exc_info=True)
-                logger.error("Continuing with next tick...")
-                # Continue the loop - don't stop for individual tick errors
-                continue
-
-    except Exception as fatal_error:
-        # Handle fatal errors that require strategy shutdown
-        logger.error("FATAL ERROR in main trading loop:")
-        logger.error(f"Error: {fatal_error}")
-        traceback.print_exc()
+    
+    async def main_loop():
+        logger.info("Starting Async Event Loop...")
+        loop = asyncio.get_running_loop()
         
-    finally:
-        logger.info("STRATEGY SHUTDOWN COMPLETE")
+        try:
+            while True:
+                try:
+                    # STEP 1: Get market data from dispatcher queue (Non-blocking)
+                    # Use run_in_executor to wait for queue item without blocking the loop
+                    tick_data = await loop.run_in_executor(None, dispatcher._main_queue.get)
+                    
+                    # Process batch of items if available to drain queue
+                    batch = [tick_data]
+                    while not dispatcher._main_queue.empty():
+                        try:
+                            batch.append(dispatcher._main_queue.get_nowait())
+                        except:
+                            break
+                    
+                    for item in batch:
+                        # STEP 2: Extract the primary instrument data
+                        if isinstance(item, list):
+                            symbol_data = item[0]
+                        else:
+                            symbol_data = item
+
+                        # STEP 4: Process tick through strategy
+                        if isinstance(symbol_data, dict) and ('last_price' in symbol_data or 'ltp' in symbol_data):
+                            # Await strategy execution (now async)
+                            await strategy.on_ticks_update(symbol_data)
+                    
+                except KeyboardInterrupt:
+                    logger.info("SHUTDOWN REQUESTED - Stopping strategy...")
+                    break
+                    
+                except Exception as tick_error:
+                    logger.error(f"Error processing tick data: {tick_error}", exc_info=True)
+                    logger.error("Continuing with next tick...")
+                    continue
+
+        except Exception as fatal_error:
+            logger.error("FATAL ERROR in main trading loop:")
+            logger.error(f"Error: {fatal_error}")
+            traceback.print_exc()
+        
+        finally:
+            logger.info("STRATEGY SHUTDOWN COMPLETE")
+
+    # Run the async main loop
+    asyncio.run(main_loop())

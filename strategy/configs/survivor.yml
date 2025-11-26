@@ -40,13 +40,13 @@ default:
   # When NIFTY rises by this many points above the PE reference value, 
   # the strategy will sell PE options
   # Example: If pe_gap=20 and NIFTY moves up 25 points, PE trade is triggered
-  pe_gap: 20
+  pe_gap: 50
   
   # Price movement threshold to trigger CE (Call) option sells  
   # When NIFTY falls by this many points below the CE reference value,
   # the strategy will sell CE options
   # Example: If ce_gap=20 and NIFTY moves down 25 points, CE trade is triggered
-  ce_gap: 20
+  ce_gap: 50
   
   # ========================================================================
   # POSITION SIZING PARAMETERS
@@ -69,12 +69,12 @@ default:
   # Distance below current NIFTY price for PE strike selection
   # PE strikes are selected this many points below the current spot price
   # Example: If NIFTY=24500 and pe_symbol_gap=200, PE strikes around 24300 are selected
-  pe_symbol_gap: 200
+  pe_symbol_gap: 400
   
   # Distance above current NIFTY price for CE strike selection
   # CE strikes are selected this many points above the current spot price
   # Example: If NIFTY=24500 and ce_symbol_gap=200, CE strikes around 24700 are selected
-  ce_symbol_gap: 200
+  ce_symbol_gap: 400
   
   # ========================================================================
   # RISK MANAGEMENT PARAMETERS
@@ -83,12 +83,12 @@ default:
   # Minimum option premium threshold for trade execution
   # Options with premium below this value will be skipped to avoid illiquid trades
   # Prevents trading very cheap options that may have poor liquidity
-  min_price_to_sell: 15
+  min_price_to_sell: 10
   
   # Maximum allowed position multiplier for risk control
   # Prevents excessive position sizes during large market moves
   # Example: If threshold=5 and calculated multiplier=6, trade will be blocked
-  sell_multiplier_threshold: 5
+  sell_multiplier_threshold: 2
   
   # ========================================================================
   # REFERENCE RESET PARAMETERS
@@ -98,13 +98,13 @@ default:
   # When NIFTY moves down by this amount after PE trades, the PE reference
   # is reset closer to current price to maintain strategy responsiveness
   # Example: If pe_reset_gap=30 and NIFTY drops 35 points after PE trade, reset occurs
-  pe_reset_gap: 30
+  pe_reset_gap: 40
   
   # Favorable movement threshold to reset CE reference value
   # When NIFTY moves up by this amount after CE trades, the CE reference
   # is reset closer to current price to maintain strategy responsiveness
   # Example: If ce_reset_gap=30 and NIFTY rises 35 points after CE trade, reset occurs
-  ce_reset_gap: 30
+  ce_reset_gap: 40
   
   # ========================================================================
   # STARTING REFERENCE POINTS

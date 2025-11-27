@@ -627,7 +627,7 @@ class SurvivorStrategy:
         req = OrderRequest(
                 symbol=symbol, exchange=exchange, transaction_type=TransactionType.SELL,
                 quantity=quantity, product_type=ProductType.MARGIN, order_type=OrderType.MARKET,
-                price=None, tag=self.strat_var_tag
+                price=0, tag=self.strat_var_tag
             )
         order_resp = self.broker.place_order(req)
         order_status = order_resp.status
@@ -1155,7 +1155,7 @@ PARAMETER GROUPS:
     logger.info(f"  Gap Triggers - PE: {config['pe_gap']}, CE: {config['ce_gap']}")
     logger.info(f"  Strike Selection - PE: -{config['pe_symbol_gap']}, CE: +{config['ce_symbol_gap']}")
     logger.info(f"  Base Quantities - PE: {config['pe_quantity']}, CE: {config['ce_quantity']}")
-    logger.info(f"  Risk Limits - Min Premium: ₹{config['min_price_to_sell']}, Max Multiplier: {config['sell_multiplier_threshold']}x")
+    logger.info(f"  Risk Limits - Min Premium: ₹{config['min_price_to_sell']}, Max Multiplier: {config['sell_multiplier_threshold']}")
 
     # ==========================================================================
     # SECTION 4: TRADING INFRASTRUCTURE SETUP

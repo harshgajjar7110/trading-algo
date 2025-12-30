@@ -23,7 +23,7 @@ def setup_logging():
 
     # Define a detailed formatter: time, logger name, level, filename:line, function, process ID, message
     formatter = logging.Formatter(
-        fmt="%(asctime)s - %(name)s - %(levelname)s - %(filename)s:%(lineno)d - %(funcName)s - PID:%(process)d - %(message)s",
+        fmt="%(levelname)s - %(filename)s:%(lineno)d - %(funcName)s %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
     file_handler.setFormatter(formatter)

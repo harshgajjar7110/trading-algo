@@ -5,6 +5,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import yaml
 from logger import logger
 from brokers import BrokerGateway, OrderRequest, Exchange, OrderType, TransactionType, ProductType
+from plugins.margin_handler import MarginHandler
 
 class SurvivorStrategy:
     """
@@ -535,6 +536,7 @@ class SurvivorStrategy:
         # Handle order placement failure
         if order_id == -1 or order_status == "error":
             logger.error(f"Order placement failed for {symbol} × {quantity}, Market Price")
+            exit()
             return
             
         logger.info(f"Placing order for {symbol} × {quantity}, Market Price")
@@ -563,7 +565,7 @@ class SurvivorStrategy:
 
         """
         logger.info(
-            f"{self.strat_var_symbol_initials} Nifty under control. "
+            f"{self.strat_var_symbol_initials} Nifty. "
             f"PE = {self.nifty_pe_last_value}, "
             f"CE = {self.nifty_ce_last_value}, "
             f"Current = {current_val}, "

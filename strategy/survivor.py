@@ -4,6 +4,9 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import yaml
 import traceback
+import pandas as pd
+import numpy as np
+from datetime import datetime, timedelta
 from logger import logger
 from brokers import BrokerGateway, OrderRequest, Exchange, OrderType, TransactionType, ProductType
 
@@ -103,6 +106,199 @@ class SurvivorStrategy:
         self.strike_difference = self._get_strike_difference(self.symbol_initials)
         logger.info(f"Strike difference for {self.symbol_initials} is {self.strike_difference}")
 
+        # Initialize Historical Data for Indicators
+        self.history_data = [] # List of minute candles
+        self.last_minute_processed = None
+        self._fetch_initial_history()
+
+    def _fetch_initial_history(self):
+        """Fetch historical data to warm up indicators."""
+        if self.strat_var_entry_filter_type == "NONE":
+            return
+
+        logger.info("Fetching historical data for indicator initialization...")
+        try:
+            end_date = datetime.now()
+            start_date = end_date - timedelta(days=self.strat_var_history_period_days)
+
+            # Format dates as expected by broker (YYYY-MM-DD HH:MM:SS)
+            start_str = start_date.strftime("%Y-%m-%d %H:%M:%S")
+            end_str = end_date.strftime("%Y-%m-%d %H:%M:%S")
+
+            history = self.broker.get_history(
+                symbol=self.strat_var_index_symbol,
+                interval="1minute", # or "minute" depending on broker mapping
+                start=start_str,
+                end=end_str
+            )
+
+            if history:
+                # Store history as list of dicts: {'ts': timestamp, 'close': close_price, ...}
+                self.history_data = history
+                logger.info(f"Loaded {len(history)} historical candles.")
+            else:
+                logger.warning("No historical data returned.")
+
+        except Exception as e:
+            logger.error(f"Error fetching historical data: {e}")
+
+    def _update_history(self, current_price, current_ts=None):
+        """Update history with current tick, managing candle formation (simplified rolling)."""
+        # For simplicity in this event-driven architecture without strict candle management,
+        # we will append the current tick as a 'close' if enough time has passed, or
+        # just maintain a list of closes.
+        # A robust way is to detect minute change.
+
+        if not current_ts:
+            current_ts = datetime.now().timestamp()
+
+        current_dt = datetime.fromtimestamp(current_ts)
+        current_minute = current_dt.replace(second=0, microsecond=0)
+
+        # If history is empty, start a new candle
+        if not self.history_data:
+            self.history_data.append({
+                'ts': current_minute.timestamp(),
+                'close': current_price,
+                'high': current_price,
+                'low': current_price,
+                'open': current_price
+            })
+            self.last_minute_processed = current_minute
+            return
+
+        last_candle = self.history_data[-1]
+        last_candle_ts = last_candle.get('ts')
+
+        if not last_candle_ts:
+             # Should not happen if data is clean
+             return
+
+        last_candle_dt = datetime.fromtimestamp(last_candle_ts)
+
+        if current_minute > last_candle_dt:
+             # New minute started, finalize previous and start new
+             self.history_data.append({
+                'ts': current_minute.timestamp(),
+                'close': current_price,
+                'high': current_price,
+                'low': current_price,
+                'open': current_price
+            })
+             # Keep history manageable (e.g., last 2000 candles)
+             if len(self.history_data) > 2000:
+                 self.history_data.pop(0)
+        else:
+            # Update current candle
+            self.history_data[-1]['close'] = current_price
+            self.history_data[-1]['high'] = max(self.history_data[-1]['high'], current_price)
+            self.history_data[-1]['low'] = min(self.history_data[-1]['low'], current_price)
+
+    def _calculate_indicators(self):
+        """Calculate RSI, ADX, EMA on self.history_data."""
+        if len(self.history_data) < 50: # Need enough data
+            return None
+
+        df = pd.DataFrame(self.history_data)
+
+        results = {}
+
+        # EMA
+        if self.strat_var_entry_filter_type in ["EMA", "BOTH"]:
+            period = self.strat_var_ema_period
+            df['ema'] = df['close'].ewm(span=period, adjust=False).mean()
+            results['ema'] = df['ema'].iloc[-1]
+
+        # RSI
+        if self.strat_var_entry_filter_type in ["RSI_ADX", "BOTH"]:
+            period = self.strat_var_rsi_period
+            delta = df['close'].diff()
+            gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
+            loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+            rs = gain / loss
+            df['rsi'] = 100 - (100 / (1 + rs))
+            results['rsi'] = df['rsi'].iloc[-1]
+
+            # ADX (Simplified TR and DM calc for robustness without talib)
+            # True Range
+            df['h-l'] = df['high'] - df['low']
+            df['h-pc'] = abs(df['high'] - df['close'].shift(1))
+            df['l-pc'] = abs(df['low'] - df['close'].shift(1))
+            df['tr'] = df[['h-l', 'h-pc', 'l-pc']].max(axis=1)
+
+            # DM
+            df['up_move'] = df['high'] - df['high'].shift(1)
+            df['down_move'] = df['low'].shift(1) - df['low']
+
+            df['plus_dm'] = np.where((df['up_move'] > df['down_move']) & (df['up_move'] > 0), df['up_move'], 0)
+            df['minus_dm'] = np.where((df['down_move'] > df['up_move']) & (df['down_move'] > 0), df['down_move'], 0)
+
+            # Smoothed
+            alpha = 1/self.strat_var_adx_period
+            df['atr'] = df['tr'].ewm(alpha=alpha, adjust=False).mean()
+            df['plus_di'] = 100 * (df['plus_dm'].ewm(alpha=alpha, adjust=False).mean() / df['atr'])
+            df['minus_di'] = 100 * (df['minus_dm'].ewm(alpha=alpha, adjust=False).mean() / df['atr'])
+
+            df['dx'] = 100 * abs(df['plus_di'] - df['minus_di']) / (df['plus_di'] + df['minus_di'])
+            df['adx'] = df['dx'].ewm(alpha=alpha, adjust=False).mean()
+            results['adx'] = df['adx'].iloc[-1]
+
+        return results
+
+    def _check_entry_filter(self, signal_type, current_price):
+        """
+        Check if entry conditions are met based on configured filter.
+        signal_type: "PE" (Bullish Trade) or "CE" (Bearish Trade)
+        """
+        filter_type = self.strat_var_entry_filter_type
+
+        if filter_type == "NONE":
+            return True
+
+        indicators = self._calculate_indicators()
+        if not indicators:
+            logger.warning("Not enough data for indicators, skipping filter check (Defaulting to Allow)")
+            return True # Or False, depending on safety preference. Usually Allow to avoid blocking forever if data stream is young.
+
+        allowed = True
+
+        if filter_type in ["EMA", "BOTH"]:
+            ema = indicators.get('ema')
+            if ema:
+                if signal_type == "PE": # Bullish Trade -> Price > EMA
+                    if not (current_price > ema):
+                        logger.debug(f"EMA Filter Blocked PE: Price {current_price} <= EMA {ema}")
+                        allowed = False
+                elif signal_type == "CE": # Bearish Trade -> Price < EMA
+                    if not (current_price < ema):
+                        logger.debug(f"EMA Filter Blocked CE: Price {current_price} >= EMA {ema}")
+                        allowed = False
+
+        if filter_type in ["RSI_ADX", "BOTH"]:
+            rsi = indicators.get('rsi')
+            adx = indicators.get('adx')
+
+            if rsi and adx:
+                # ADX Check
+                if adx < self.strat_var_adx_threshold:
+                    logger.debug(f"ADX Filter Blocked: ADX {adx} < Threshold {self.strat_var_adx_threshold}")
+                    allowed = False
+
+                # RSI Check
+                if signal_type == "PE": # Bullish Trade -> RSI > Min (Strong Momentum)
+                    if rsi <= self.strat_var_rsi_min:
+                        logger.debug(f"RSI Filter Blocked PE: RSI {rsi} <= Min {self.strat_var_rsi_min}")
+                        allowed = False
+                elif signal_type == "CE": # Bearish Trade -> RSI < Max?
+                    # Wait, usually Trend Following Bearish means RSI is Low (< 50) or RSI is Falling?
+                    # Config says "rsi_max". If we are selling CE (Bearish), we want momentum DOWN.
+                    # So RSI should be < 50 (or whatever max is set).
+                    if rsi >= self.strat_var_rsi_max:
+                         logger.debug(f"RSI Filter Blocked CE: RSI {rsi} >= Max {self.strat_var_rsi_max}")
+                         allowed = False
+
+        return allowed
+
     def _nifty_quote(self):
         symbol_code = self.strat_var_index_symbol
         return self.broker.get_quote(symbol_code)
@@ -175,6 +371,9 @@ class SurvivorStrategy:
         """
         current_price = ticks['last_price'] if 'last_price' in ticks else ticks['ltp']
         
+        # Update historical data for indicators
+        self._update_history(current_price)
+
         # Process trading opportunities for both sides
         self._handle_pe_trade(current_price)  # Handle Put option opportunities
         self._handle_ce_trade(current_price)  # Handle Call option opportunities
@@ -233,6 +432,19 @@ class SurvivorStrategy:
         # Calculate price difference and check if it exceeds gap threshold
         price_diff = round(current_price - self.nifty_pe_last_value, 0)
         if price_diff > self.strat_var_pe_gap:
+            # Check Entry Filter
+            if not self._check_entry_filter("PE", current_price):
+                # We do NOT update the reference value here if filter fails,
+                # effectively skipping this 'gap' opportunity.
+                # OR do we update reference but skip trade?
+                # If we skip update, the gap will remain huge, and next tick will trigger again?
+                # Usually in this grid logic, if you miss a level, you might want to skip it entirely
+                # or wait.
+                # Let's simple LOG and RETURN. The reference value stays same.
+                # Next tick, if condition persists, it will try again.
+                # Ideally, if filter blocks, we treat it as "market moved but not safe to enter".
+                return
+
             # Calculate multiplier for position sizing
             sell_multiplier = int(price_diff / self.strat_var_pe_gap)
             
@@ -310,6 +522,10 @@ class SurvivorStrategy:
         # Calculate price difference and check if it exceeds gap threshold
         price_diff = round(self.nifty_ce_last_value - current_price, 0)  
         if price_diff > self.strat_var_ce_gap:
+            # Check Entry Filter
+            if not self._check_entry_filter("CE", current_price):
+                return
+
             # Calculate multiplier for position sizing
             sell_multiplier = int(price_diff / self.strat_var_ce_gap)
             

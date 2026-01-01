@@ -147,3 +147,38 @@ default:
   # Tag for the orders to track orders from this strategy
   tag: "Survivor"
 
+  # ========================================================================
+  # ENTRY FILTER PARAMETERS
+  # ========================================================================
+
+  # Type of entry filter to use for confirming trades
+  # Choices: NONE, RSI_ADX, EMA, BOTH
+  # NONE: No additional filtering, trade purely on gap logic
+  # RSI_ADX: Require RSI and ADX conditions to be met
+  # EMA: Require price to be above/below EMA
+  # BOTH: Require both sets of conditions
+  entry_filter_type: "NONE"
+
+  # RSI period for calculation (default: 14)
+  rsi_period: 14
+
+  # Minimum RSI value for Bullish entry (Selling PE)
+  # Only sell PE if RSI > rsi_min
+  rsi_min: 50
+
+  # Maximum RSI value for Bearish entry (Selling CE)
+  # Only sell CE if RSI < rsi_max
+  rsi_max: 50
+
+  # ADX period for calculation (default: 14)
+  adx_period: 14
+
+  # Minimum ADX value to confirm strong trend
+  # Only trade if ADX > adx_threshold
+  adx_threshold: 25
+
+  # EMA period for trend filter (default: 20)
+  ema_period: 20
+
+  # Number of days of historical data to fetch for indicator initialization
+  history_period_days: 5

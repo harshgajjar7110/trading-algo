@@ -566,4 +566,69 @@ class ZerodhaDriver(BrokerDriver):
     def convert_position(self, *args: Any, **kwargs: Any) -> Any:
         raise UnsupportedOperationError("ZerodhaDriver.convert_position not implemented yet in brokers2")
 
+    def place_gtt_order(self, symbol: str, quantity: int, price: float, transaction_type: str, order_type: str, exchange: str, product: str, tag: str = "Unknown", limit_price: Optional[float] = None) -> OrderResponse:
+        """
+        Place a GTT order.
+        
+        Args:
+            price: The trigger price.
+            limit_price: The execution price (for LIMIT orders). If None, defaults to trigger price.
+        """
+        if not self._kite:
+            return OrderResponse(status="error", order_id=None, message="unauthenticated")
+        
+        try:
+            # Use provided limit_price or fallback to trigger price
+            execution_price = limit_price if limit_price is not None else price
+            
+            # Construct the single leg order
+            # Note: Kite expects specific strings. We map or pass through.
+            # Survivor passes "LIMIT", "BUY", "NRML", "NFO" strings.
+            order_obj = {
+                "exchange": exchange,
+                "tradingsymbol": symbol,
+                "transaction_type": transaction_type,
+                "quantity": quantity,
+                "order_type": order_type,
+                "product": product,
+                "price": execution_price,
+                "tag": tag
+            }
+            
+            # Fetch last price for GTT validation
+            quote_key = f"{exchange}:{symbol}" if ":" not in symbol else symbol
+            # self.get_quote implementation expects broker format or internal format?
+            # get_quote code: exch, tradingsymbol = symbol.split(":", 1)
+            # So we pass "EXCH:SYMBOL"
+            if ":" not in symbol:
+                quote_symbol = f"{exchange}:{symbol}"
+            else:
+                quote_symbol = symbol
+            
+            # Get last price
+            current_last_price = 0.0
+            try:
+                # Use internal kite method if possible to avoid quote object overhead or just use get_quote
+                q = self.get_quote(quote_symbol)
+                current_last_price = q.last_price
+            except Exception:
+                pass
+            
+            # Place GTT
+            # trigger_values must be a list
+            resp = self._kite.place_gtt(
+                trigger_type=self._kite.GTT_TYPE_SINGLE,
+                tradingsymbol=symbol if ":" not in symbol else symbol.split(":")[1],
+                exchange=exchange,
+                trigger_values=[price],
+                last_price=current_last_price,
+                orders=[order_obj]
+            )
+            
+            # Resp example: {'trigger_id': 12345}
+            t_id = str(resp.get('trigger_id'))
+            return OrderResponse(status="ok", order_id=t_id, raw=resp)
+            
+        except Exception as e:
+            return OrderResponse(status="error", order_id=None, message=str(e))
 

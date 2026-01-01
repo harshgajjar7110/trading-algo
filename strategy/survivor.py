@@ -3,9 +3,9 @@ import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import yaml
+import traceback
 from logger import logger
 from brokers import BrokerGateway, OrderRequest, Exchange, OrderType, TransactionType, ProductType
-from plugins.margin_handler import MarginHandler
 
 class SurvivorStrategy:
     """
@@ -272,7 +272,7 @@ class SurvivorStrategy:
                     
                 # Execute the trade
                 logger.info(f"Execute PE sell @ {instrument['symbol']} × {total_quantity}, Market Price")
-                self._place_order(instrument['symbol'], total_quantity)
+                self._place_order(instrument['symbol'], total_quantity, quote.last_price)
                 
                 # Set reset flag to enable reset logic
                 self.pe_reset_gap_flag = 1
@@ -348,7 +348,7 @@ class SurvivorStrategy:
                     
                 # Execute the trade
                 logger.info(f"Execute CE sell @ {instrument['symbol']} × {total_quantity}, Market Price")
-                self._place_order(instrument['symbol'], total_quantity)
+                self._place_order(instrument['symbol'], total_quantity, quote.last_price)
                 
                 # Set reset flag to enable reset logic
                 self.ce_reset_gap_flag = 1
@@ -497,13 +497,14 @@ class SurvivorStrategy:
             else:
                 return instrument
 
-    def _place_order(self, symbol, quantity):
+    def _place_order(self, symbol, quantity, entry_price=None):
         """
         Execute order placement through the broker
         
         Args:
             symbol (str): Trading symbol for the option
             quantity (int): Number of lots/shares to trade
+            entry_price (float, optional): Estimated entry price for reference
             
         Process:
         1. Place market order through broker interface
@@ -523,41 +524,106 @@ class SurvivorStrategy:
         if self.strat_var_exchange == "NFO":
             exchange = Exchange.NFO
 
+        logger.info(f"Constructing OrderRequest: symbol={symbol}, qty={quantity}, type=SELL, market=MARKET")
+
         req = OrderRequest(
                 symbol=symbol, exchange=exchange, transaction_type=TransactionType.SELL,
                 quantity=quantity, product_type=ProductType.MARGIN, order_type=OrderType.MARKET,
                 price=0, tag=self.strat_var_tag
             )
-        order_resp = self.broker.place_order(req)
-        order_status = order_resp.status
-        logger.debug(f"Order placement response: {order_resp}")
-        order_id = order_resp.order_id
+        
+        try:
+            order_resp = self.broker.place_order(req)
+            order_status = order_resp.status
+            logger.debug(f"Order placement response: {order_resp}")
+            order_id = order_resp.order_id
+    
+            # Handle order placement failure
+            if order_id == -1 or order_status == "error":
+                logger.error(f"Order placement failed for {symbol} × {quantity}, Market Price")
+                exit()
+                return
 
-        # Handle order placement failure
-        if order_id == -1 or order_status == "error":
-            logger.error(f"Order placement failed for {symbol} × {quantity}, Market Price")
-            exit()
-            return
+            # Note: In a real scenario, we should verify the order state (e.g. FILLED) 
+            # via a separate status check before tracking it as a risk. 
+            # For now, we assume successful submission implies potential risk.
+                
+            logger.info(f"Placing order for {symbol} × {quantity}, Market Price")
             
-        logger.info(f"Placing order for {symbol} × {quantity}, Market Price")
-        
-        # Track the order using OrderTracker
-        from datetime import datetime
-        order_details = {
-            "order_id": order_id,
-            "symbol": symbol,
-            "transaction_type": self.strat_var_trans_type,
-            "quantity": quantity,
-            "price": None,  # Market order
-            "timestamp": datetime.now().isoformat(),
-        }
-        
-        # Add to order tracking system
-        # self.order_tracker.add_order(order_details)
-        
-        # Log order placement for strategy tracking
-        logger.info(f"Survivor order tracked: {order_id} - {self.strat_var_trans_type} {symbol} × {quantity}")
-        
+            # Track the order using OrderTracker
+            from datetime import datetime
+            order_details = {
+                "order_id": order_id,
+                "symbol": symbol,
+                "transaction_type": self.strat_var_trans_type,
+                "quantity": quantity,
+                "price": None,  # Market order execution price is unknown at this sync point
+                "entry_price": entry_price, # Store reference price for Hard Deck
+                "timestamp": datetime.now().isoformat(),
+            }
+            
+            # Add to order tracking system
+            if self.order_tracker:
+                self.order_tracker.add_order(order_details)
+            
+            # Log order placement for strategy tracking
+            logger.info(f"Survivor order tracked: {order_id} - {self.strat_var_trans_type} {symbol} × {quantity} (Ref: {entry_price})")
+
+            # ------------------------------------------------------------------
+            # HARD DECK IMPLEMENTATION: GTT STOP LOSS
+            # ------------------------------------------------------------------
+            # Immediately place a GTT Stop Loss order if entry_price is available
+            if entry_price and entry_price > 0:
+                self._place_gtt_stop_loss(symbol, quantity, entry_price)
+
+        except Exception as e:
+            logger.error(f"Exception during order placement: {e}")
+            exit()
+
+    def _place_gtt_stop_loss(self, symbol, quantity, entry_price):
+        """
+        Place a GTT (Good Till Triggered) Stop Loss order.
+        Trigger Price = Entry Price * 2.0 (Hard Deck)
+        """
+        try:
+            trigger_price = round(entry_price * 2.0, 1)
+            # Use a slightly higher Limit Price to ensure fill (5% buffer)
+            limit_price = round(trigger_price * 1.05, 1)
+
+            logger.info(f"Placing GTT for {symbol}: Trigger {trigger_price}, Limit {limit_price}")
+
+            # Constructing the 'orders' list as per User specification
+            # orders JSON order array containing transaction_type, quantity, price
+            single_order = {
+                "transaction_type": "BUY", # Closing a SELL position
+                "quantity": quantity,
+                "price": limit_price,
+                "order_type": "LIMIT",
+                "product": "NRML",  # Explicitly adding product, standard for GTT
+                "exchange": self.strat_var_exchange,
+                "tradingsymbol": symbol
+            }
+            
+            logger.info(f"GTT Params: trigger_type='single', symbol={symbol}, exchange={self.strat_var_exchange}, trigger_values=[{trigger_price}], last_price={entry_price}, orders=[{single_order}]")
+            # def place_gtt_order(self, symbol, quantity, price, transaction_type, order_type, exchange, product, tag="Unknown", limit_price=None): 
+            # update below method signature as required
+            self.broker.place_gtt_order(
+                symbol=symbol,
+                quantity=quantity,
+                price=trigger_price,
+                transaction_type="BUY",
+                order_type="LIMIT",
+                exchange=self.strat_var_exchange,
+                product="NRML",
+                tag="GTT Stop Loss",
+                limit_price=limit_price
+            )
+            # def place_gtt_order(self, symbol, quantity, price, transaction_type, order_type, exchange, product, tag="Unknown"): 
+            logger.info(f"GTT Stop Loss Signal Sent for {symbol}")
+
+        except Exception as e:
+            logger.error(f"Failed to place GTT Stop Loss for {symbol}: {e}")
+            logger.error(f"Traceback: {traceback.format_exc()}")
 
     def _log_stable_market(self, current_val):
         """

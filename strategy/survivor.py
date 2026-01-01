@@ -6,6 +6,7 @@ import yaml
 import traceback
 import pandas as pd
 import numpy as np
+import json
 from datetime import datetime, timedelta
 from logger import logger
 from brokers import BrokerGateway, OrderRequest, Exchange, OrderType, TransactionType, ProductType
@@ -108,6 +109,7 @@ class SurvivorStrategy:
 
         # Initialize Historical Data for Indicators
         self.history_data = [] # List of minute candles
+        self.last_indicators = {} # Cache for logging
         self.last_minute_processed = None
         self._fetch_initial_history()
 
@@ -133,9 +135,27 @@ class SurvivorStrategy:
             )
 
             if history:
-                # Store history as list of dicts: {'ts': timestamp, 'close': close_price, ...}
-                self.history_data = history
-                logger.info(f"Loaded {len(history)} historical candles.")
+                # Normalize history data
+                # Zerodha/Kite Connect typically returns 'date' (datetime obj) or 'ts' (in driver normalization)
+                # Our driver implementation in `brokers/integrations/zerodha/driver.py` already normalizes history to:
+                # { "ts": int_timestamp, "close": float, ... }
+                # So we just need to ensure we don't break if 'date' is present but 'ts' isn't (though driver ensures 'ts').
+
+                normalized_history = []
+                for candle in history:
+                    if 'ts' not in candle:
+                        # Fallback if driver didn't normalize (shouldn't happen with our driver but good for safety)
+                        dt = candle.get('date')
+                        if dt:
+                            if hasattr(dt, 'timestamp'):
+                                candle['ts'] = int(dt.timestamp())
+                            else:
+                                # String parsing fallback if needed, but unlikely given driver
+                                pass
+                    normalized_history.append(candle)
+
+                self.history_data = normalized_history
+                logger.info(f"Loaded {len(normalized_history)} historical candles.")
             else:
                 logger.warning("No historical data returned.")
 
@@ -260,6 +280,8 @@ class SurvivorStrategy:
             logger.warning("Not enough data for indicators, skipping filter check (Defaulting to Allow)")
             return True # Or False, depending on safety preference. Usually Allow to avoid blocking forever if data stream is young.
 
+        # Store for logging
+        self.last_indicators = indicators
         allowed = True
 
         if filter_type in ["EMA", "BOTH"]:
@@ -785,60 +807,82 @@ class SurvivorStrategy:
             # Log order placement for strategy tracking
             logger.info(f"Survivor order tracked: {order_id} - {self.strat_var_trans_type} {symbol} × {quantity} (Ref: {entry_price})")
 
+            # Structured JSON Logging
+            self._log_trade_to_file({
+                "order_id": str(order_id),
+                "symbol": symbol,
+                "transaction_type": self.strat_var_trans_type,
+                "quantity": quantity,
+                "entry_price_ref": entry_price,
+                "indicators": self.last_indicators,
+                "timestamp": datetime.now().isoformat()
+            })
+
             # ------------------------------------------------------------------
-            # HARD DECK IMPLEMENTATION: GTT STOP LOSS
+            # HARD DECK IMPLEMENTATION: GTT OCO (SL + Target)
             # ------------------------------------------------------------------
-            # Immediately place a GTT Stop Loss order if entry_price is available
+            # Immediately place a GTT OCO order if entry_price is available
             if entry_price and entry_price > 0:
-                self._place_gtt_stop_loss(symbol, quantity, entry_price)
+                self._place_gtt_oco(symbol, quantity, entry_price)
 
         except Exception as e:
             logger.error(f"Exception during order placement: {e}")
             exit()
 
-    def _place_gtt_stop_loss(self, symbol, quantity, entry_price):
-        """
-        Place a GTT (Good Till Triggered) Stop Loss order.
-        Trigger Price = Entry Price * 2.0 (Hard Deck)
-        """
+    def _log_trade_to_file(self, trade_data):
+        """Append trade details to a JSONL file for analysis."""
         try:
-            trigger_price = round(entry_price * 2.0, 1)
-            # Use a slightly higher Limit Price to ensure fill (5% buffer)
-            limit_price = round(trigger_price * 1.05, 1)
+            log_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "artifacts")
+            if not os.path.exists(log_dir):
+                os.makedirs(log_dir)
 
-            logger.info(f"Placing GTT for {symbol}: Trigger {trigger_price}, Limit {limit_price}")
+            log_file = os.path.join(log_dir, "survivor_trades.jsonl")
 
-            # Constructing the 'orders' list as per User specification
-            # orders JSON order array containing transaction_type, quantity, price
-            single_order = {
-                "transaction_type": "BUY", # Closing a SELL position
-                "quantity": quantity,
-                "price": limit_price,
-                "order_type": "LIMIT",
-                "product": "NRML",  # Explicitly adding product, standard for GTT
-                "exchange": self.strat_var_exchange,
-                "tradingsymbol": symbol
-            }
-            
-            logger.info(f"GTT Params: trigger_type='single', symbol={symbol}, exchange={self.strat_var_exchange}, trigger_values=[{trigger_price}], last_price={entry_price}, orders=[{single_order}]")
-            # def place_gtt_order(self, symbol, quantity, price, transaction_type, order_type, exchange, product, tag="Unknown", limit_price=None): 
-            # update below method signature as required
-            self.broker.place_gtt_order(
-                symbol=symbol,
-                quantity=quantity,
-                price=trigger_price,
-                transaction_type="BUY",
-                order_type="LIMIT",
-                exchange=self.strat_var_exchange,
-                product="NRML",
-                tag="GTT Stop Loss",
-                limit_price=limit_price
-            )
-            # def place_gtt_order(self, symbol, quantity, price, transaction_type, order_type, exchange, product, tag="Unknown"): 
-            logger.info(f"GTT Stop Loss Signal Sent for {symbol}")
+            with open(log_file, "a") as f:
+                f.write(json.dumps(trade_data) + "\n")
+
+            logger.info(f"Trade logged to {log_file}")
 
         except Exception as e:
-            logger.error(f"Failed to place GTT Stop Loss for {symbol}: {e}")
+            logger.error(f"Failed to log trade to JSON: {e}")
+
+    def _place_gtt_oco(self, symbol, quantity, entry_price):
+        """
+        Place a GTT OCO (One Cancels Other) order for SL and Target.
+        Logic:
+        - Stop Loss: 30% increase in price (since we sold).
+        - Profit Target: 60% decrease in price.
+        """
+        try:
+            # 30% Stop Loss (Price rises 30%)
+            sl_trigger = round(entry_price * 1.30, 1)
+            sl_limit = round(sl_trigger * 1.02, 1) # 2% buffer for execution
+
+            # 60% Profit Target (Price falls 60%)
+            target_trigger = round(entry_price * 0.40, 1) # 100% - 60% = 40% remaining
+            target_limit = round(target_trigger * 0.98, 1) # 2% buffer for execution (lower than trigger for Buy)
+
+            logger.info(f"Placing GTT OCO for {symbol}: Entry {entry_price}")
+            logger.info(f"  > SL Trigger: {sl_trigger}, Limit: {sl_limit}")
+            logger.info(f"  > Target Trigger: {target_trigger}, Limit: {target_limit}")
+
+            self.broker.place_gtt_oco_order(
+                symbol=symbol,
+                exchange=self.strat_var_exchange,
+                product="NRML",
+                transaction_type="BUY", # We sold to open, so we BUY to close
+                quantity=quantity,
+                stop_loss_trigger=sl_trigger,
+                stop_loss_limit=sl_limit,
+                target_trigger=target_trigger,
+                target_limit=target_limit,
+                tag="GTT OCO SL/Target"
+            )
+
+            logger.info(f"GTT OCO Signal Sent for {symbol}")
+
+        except Exception as e:
+            logger.error(f"Failed to place GTT OCO for {symbol}: {e}")
             logger.error(f"Traceback: {traceback.format_exc()}")
 
     def _log_stable_market(self, current_val):

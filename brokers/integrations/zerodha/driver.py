@@ -568,10 +568,17 @@ class ZerodhaDriver(BrokerDriver):
 
     def place_gtt_order(self, symbol: str, quantity: int, price: float, transaction_type: str, order_type: str, exchange: str, product: str, tag: str = "Unknown", limit_price: Optional[float] = None) -> OrderResponse:
         """
-        Place a GTT order.
+        Place a Single-leg GTT order.
         
         Args:
-            price: The trigger price.
+            symbol: Trading symbol (e.g., "INFY", "NIFTY23OCT19500CE")
+            quantity: Quantity to transact
+            price: The trigger price
+            transaction_type: "BUY" or "SELL"
+            order_type: "LIMIT" (GTT orders are typically LIMIT)
+            exchange: Exchange (e.g., "NSE", "NFO")
+            product: Product type (e.g., "CNC", "NRML", "MIS")
+            tag: Optional tag
             limit_price: The execution price (for LIMIT orders). If None, defaults to trigger price.
         """
         if not self._kite:
@@ -582,8 +589,6 @@ class ZerodhaDriver(BrokerDriver):
             execution_price = limit_price if limit_price is not None else price
             
             # Construct the single leg order
-            # Note: Kite expects specific strings. We map or pass through.
-            # Survivor passes "LIMIT", "BUY", "NRML", "NFO" strings.
             order_obj = {
                 "exchange": exchange,
                 "tradingsymbol": symbol,
@@ -595,11 +600,7 @@ class ZerodhaDriver(BrokerDriver):
                 "tag": tag
             }
             
-            # Fetch last price for GTT validation
-            quote_key = f"{exchange}:{symbol}" if ":" not in symbol else symbol
-            # self.get_quote implementation expects broker format or internal format?
-            # get_quote code: exch, tradingsymbol = symbol.split(":", 1)
-            # So we pass "EXCH:SYMBOL"
+            # Prepare symbol for quote fetching
             if ":" not in symbol:
                 quote_symbol = f"{exchange}:{symbol}"
             else:
@@ -608,14 +609,12 @@ class ZerodhaDriver(BrokerDriver):
             # Get last price
             current_last_price = 0.0
             try:
-                # Use internal kite method if possible to avoid quote object overhead or just use get_quote
                 q = self.get_quote(quote_symbol)
                 current_last_price = q.last_price
             except Exception:
                 pass
             
             # Place GTT
-            # trigger_values must be a list
             resp = self._kite.place_gtt(
                 trigger_type=self._kite.GTT_TYPE_SINGLE,
                 tradingsymbol=symbol if ":" not in symbol else symbol.split(":")[1],
@@ -632,3 +631,92 @@ class ZerodhaDriver(BrokerDriver):
         except Exception as e:
             return OrderResponse(status="error", order_id=None, message=str(e))
 
+    def place_gtt_oco_order(
+        self,
+        symbol: str,
+        exchange: str,
+        product: str,
+        transaction_type: str,
+        quantity: int,
+        stop_loss_trigger: float,
+        stop_loss_limit: float,
+        target_trigger: float,
+        target_limit: float,
+        tag: str = "Unknown"
+    ) -> OrderResponse:
+        """
+        Place an OCO (Two-leg) GTT order (One Cancels Other).
+        Typically used for Stop Loss and Target.
+
+        Args:
+            symbol: Trading symbol
+            exchange: Exchange name
+            product: Product type
+            transaction_type: Transaction type for the exit orders (usually opposite of entry)
+            quantity: Quantity to transact
+            stop_loss_trigger: Trigger price for Stop Loss
+            stop_loss_limit: Execution price for Stop Loss
+            target_trigger: Trigger price for Target
+            target_limit: Execution price for Target
+            tag: Optional tag
+        """
+        if not self._kite:
+            return OrderResponse(status="error", order_id=None, message="unauthenticated")
+
+        try:
+            # Construct the orders list
+            # Order 1: Stop Loss
+            order_sl = {
+                "exchange": exchange,
+                "tradingsymbol": symbol,
+                "transaction_type": transaction_type,
+                "quantity": quantity,
+                "order_type": "LIMIT",
+                "product": product,
+                "price": stop_loss_limit,
+                "tag": tag
+            }
+
+            # Order 2: Target
+            order_target = {
+                "exchange": exchange,
+                "tradingsymbol": symbol,
+                "transaction_type": transaction_type,
+                "quantity": quantity,
+                "order_type": "LIMIT",
+                "product": product,
+                "price": target_limit,
+                "tag": tag
+            }
+
+            # Prepare symbol for quote fetching
+            if ":" not in symbol:
+                quote_symbol = f"{exchange}:{symbol}"
+            else:
+                quote_symbol = symbol
+
+            # Get last price
+            current_last_price = 0.0
+            try:
+                q = self.get_quote(quote_symbol)
+                current_last_price = q.last_price
+            except Exception:
+                pass
+
+            # Place GTT OCO
+            # Note: The order of trigger_values must match the order of orders.
+            resp = self._kite.place_gtt(
+                trigger_type=self._kite.GTT_TYPE_OCO,
+                tradingsymbol=symbol if ":" not in symbol else symbol.split(":")[1],
+                exchange=exchange,
+                trigger_values=[stop_loss_trigger, target_trigger],
+                last_price=current_last_price,
+                orders=[order_sl, order_target]
+            )
+
+            # Resp example: {'trigger_id': 12345}
+            t_id = str(resp.get('trigger_id'))
+            return OrderResponse(status="ok", order_id=t_id, raw=resp)
+
+        except Exception as e:
+            return OrderResponse(status="error", order_id=None, message=str(e))

@@ -235,6 +235,15 @@ class BrokerGateway:
     def place_gtt_order(self, *args: Any, **kwargs: Any) -> OrderResponse:
         return self.driver.place_gtt_order(*args, **kwargs)
 
+    def place_gtt_oco_order(self, *args: Any, **kwargs: Any) -> OrderResponse:
+        """
+        Place a GTT OCO (One Cancels Other) order.
+        Usually maps to driver's place_gtt_oco_order.
+        """
+        if hasattr(self.driver, "place_gtt_oco_order"):
+            return self.driver.place_gtt_oco_order(*args, **kwargs)
+        raise UnsupportedOperationError(f"Broker {self.broker_name} does not support GTT OCO orders")
+
     def place_bracket_order(self, *args: Any, **kwargs: Any) -> OrderResponse:
         return self.driver.place_bracket_order(*args, **kwargs)
 

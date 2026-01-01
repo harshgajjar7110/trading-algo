@@ -123,9 +123,10 @@ class SurvivorStrategy:
             end_date = datetime.now()
             start_date = end_date - timedelta(days=self.strat_var_history_period_days)
 
-            # Format dates as expected by broker (YYYY-MM-DD HH:MM:SS)
-            start_str = start_date.strftime("%Y-%m-%d %H:%M:%S")
-            end_str = end_date.strftime("%Y-%m-%d %H:%M:%S")
+            # Format dates as expected by BrokerGateway (YYYY-MM-DD)
+            # BrokerGateway.get_history expects strict date strings and handles chunking
+            start_str = start_date.strftime("%Y-%m-%d")
+            end_str = end_date.strftime("%Y-%m-%d")
 
             history = self.broker.get_history(
                 symbol=self.strat_var_index_symbol,

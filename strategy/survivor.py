@@ -507,7 +507,14 @@ class SurvivorStrategy:
                     
                 # Execute the trade
                 logger.info(f"Execute PE sell @ {instrument['symbol']} × {total_quantity}, Market Price")
-                self._place_order(instrument['symbol'], total_quantity, quote.last_price)
+                self._place_order(
+                    symbol=instrument['symbol'],
+                    quantity=total_quantity,
+                    entry_price=quote.last_price,
+                    index_price=current_price,
+                    gap_level=sell_multiplier,
+                    filter_type="PE Gap Level"
+                )
                 
                 # Set reset flag to enable reset logic
                 self.pe_reset_gap_flag = 1
@@ -587,7 +594,14 @@ class SurvivorStrategy:
                     
                 # Execute the trade
                 logger.info(f"Execute CE sell @ {instrument['symbol']} × {total_quantity}, Market Price")
-                self._place_order(instrument['symbol'], total_quantity, quote.last_price)
+                self._place_order(
+                    symbol=instrument['symbol'],
+                    quantity=total_quantity,
+                    entry_price=quote.last_price,
+                    index_price=current_price,
+                    gap_level=sell_multiplier,
+                    filter_type="CE Gap Level"
+                )
                 
                 # Set reset flag to enable reset logic
                 self.ce_reset_gap_flag = 1
@@ -736,7 +750,7 @@ class SurvivorStrategy:
             else:
                 return instrument
 
-    def _place_order(self, symbol, quantity, entry_price=None):
+    def _place_order(self, symbol, quantity, entry_price=None, index_price=None, gap_level=None, filter_type=None):
         """
         Execute order placement through the broker
         
@@ -744,6 +758,9 @@ class SurvivorStrategy:
             symbol (str): Trading symbol for the option
             quantity (int): Number of lots/shares to trade
             entry_price (float, optional): Estimated entry price for reference
+            index_price (float, optional): Underlying index price for reference
+            gap_level (int, optional): The gap multiplier level
+            filter_type (str, optional): The gap/filter type string
             
         Process:
         1. Place market order through broker interface
@@ -808,6 +825,25 @@ class SurvivorStrategy:
             # Log order placement for strategy tracking
             logger.info(f"Survivor order tracked: {order_id} - {self.strat_var_trans_type} {symbol} × {quantity} (Ref: {entry_price})")
 
+            # ------------------------------------------------------------------
+            # HARD DECK IMPLEMENTATION: GTT OCO (SL + Target)
+            # ------------------------------------------------------------------
+            gtt_status = "Skipped"
+            # Immediately place a GTT OCO order if entry_price is available
+            if entry_price and entry_price > 0:
+                try:
+                    self._place_gtt_oco(symbol, quantity, entry_price)
+                    gtt_status = "Success"
+                except Exception as e:
+                    gtt_status = f"Failed: {str(e)}"
+                    logger.error(f"GTT OCO Failed: {e}")
+
+            # Construct Entry Condition String
+            # e.g. "PE Gap Level 1 + EMA"
+            entry_condition = f"{filter_type} {gap_level}" if filter_type and gap_level else "Unknown"
+            if self.strat_var_entry_filter_type != "NONE":
+                entry_condition += f" + {self.strat_var_entry_filter_type}"
+
             # Structured JSON Logging
             self._log_trade_to_file({
                 "order_id": str(order_id),
@@ -815,16 +851,12 @@ class SurvivorStrategy:
                 "transaction_type": self.strat_var_trans_type,
                 "quantity": quantity,
                 "entry_price_ref": entry_price,
+                "index_price": index_price,
+                "entry_condition": entry_condition,
+                "gtt_status": gtt_status,
                 "indicators": self.last_indicators,
                 "timestamp": datetime.now().isoformat()
             })
-
-            # ------------------------------------------------------------------
-            # HARD DECK IMPLEMENTATION: GTT OCO (SL + Target)
-            # ------------------------------------------------------------------
-            # Immediately place a GTT OCO order if entry_price is available
-            if entry_price and entry_price > 0:
-                self._place_gtt_oco(symbol, quantity, entry_price)
 
         except Exception as e:
             logger.error(f"Exception during order placement: {e}")
@@ -854,37 +886,32 @@ class SurvivorStrategy:
         - Stop Loss: 30% increase in price (since we sold).
         - Profit Target: 60% decrease in price.
         """
-        try:
-            # 30% Stop Loss (Price rises 30%)
-            sl_trigger = round(entry_price * 1.30, 1)
-            sl_limit = round(sl_trigger * 1.02, 1) # 2% buffer for execution
+        # 30% Stop Loss (Price rises 30%)
+        sl_trigger = round(entry_price * 1.30, 1)
+        sl_limit = round(sl_trigger * 1.02, 1) # 2% buffer for execution
 
-            # 60% Profit Target (Price falls 60%)
-            target_trigger = round(entry_price * 0.40, 1) # 100% - 60% = 40% remaining
-            target_limit = round(target_trigger * 0.98, 1) # 2% buffer for execution (lower than trigger for Buy)
+        # 60% Profit Target (Price falls 60%)
+        target_trigger = round(entry_price * 0.40, 1) # 100% - 60% = 40% remaining
+        target_limit = round(target_trigger * 0.98, 1) # 2% buffer for execution (lower than trigger for Buy)
 
-            logger.info(f"Placing GTT OCO for {symbol}: Entry {entry_price}")
-            logger.info(f"  > SL Trigger: {sl_trigger}, Limit: {sl_limit}")
-            logger.info(f"  > Target Trigger: {target_trigger}, Limit: {target_limit}")
+        logger.info(f"Placing GTT OCO for {symbol}: Entry {entry_price}")
+        logger.info(f"  > SL Trigger: {sl_trigger}, Limit: {sl_limit}")
+        logger.info(f"  > Target Trigger: {target_trigger}, Limit: {target_limit}")
 
-            self.broker.place_gtt_oco_order(
-                symbol=symbol,
-                exchange=self.strat_var_exchange,
-                product="NRML",
-                transaction_type="BUY", # We sold to open, so we BUY to close
-                quantity=quantity,
-                stop_loss_trigger=sl_trigger,
-                stop_loss_limit=sl_limit,
-                target_trigger=target_trigger,
-                target_limit=target_limit,
-                tag="GTT OCO SL/Target"
-            )
+        self.broker.place_gtt_oco_order(
+            symbol=symbol,
+            exchange=self.strat_var_exchange,
+            product="NRML",
+            transaction_type="BUY", # We sold to open, so we BUY to close
+            quantity=quantity,
+            stop_loss_trigger=sl_trigger,
+            stop_loss_limit=sl_limit,
+            target_trigger=target_trigger,
+            target_limit=target_limit,
+            tag="GTT OCO SL/Target"
+        )
 
-            logger.info(f"GTT OCO Signal Sent for {symbol}")
-
-        except Exception as e:
-            logger.error(f"Failed to place GTT OCO for {symbol}: {e}")
-            logger.error(f"Traceback: {traceback.format_exc()}")
+        logger.info(f"GTT OCO Signal Sent for {symbol}")
 
     def _log_stable_market(self, current_val):
         """

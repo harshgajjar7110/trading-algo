@@ -192,7 +192,7 @@ class FyrodhaDriver(BrokerDriver):
         exch, tsym = symbol.split(":", 1) if ":" in symbol else ("NSE", symbol)
         return Quote(symbol=tsym.replace("-EQ", ""), exchange=Exchange[exch], last_price=evolved, raw={"seed": base, "sim": evolved})
 
-    def get_history(self, symbol: str, interval: str, start: str, end: str) -> List[Dict[str, Any]]:
+    def get_history(self, symbol: str, interval: str, start: str, end: str, oi: bool = False) -> List[Dict[str, Any]]:
         base = self._seed_quote(symbol)
         # Generate synthetic candles at ~15m resolution unless otherwise requested
         try:
@@ -215,7 +215,10 @@ class FyrodhaDriver(BrokerDriver):
             l = min(o, self._bm_step(o))
             c = self._bm_step(o)
             v = int(abs(self._rng.gauss(1e5, 2e4)))
-            candles.append({"ts": ts, "open": o, "high": h, "low": l, "close": c, "volume": v})
+            candles.append({
+                "ts": ts, "open": o, "high": h, "low": l, "close": c, "volume": v,
+                "oi": 0  # Simulated OI
+            })
             t = c
             start_dt += timedelta(minutes=step_minutes)
             ts = int(start_dt.timestamp())

@@ -14,131 +14,130 @@
 # Each trade uses a multiplier system based on the magnitude of price movement,
 # allowing the strategy to scale positions according to market volatility.
 # If working with Fyers, the values will be different and would need to adhere
-# to the expected values of Fyers API (it would also require some changes in 
+# to the expected values of Fyers API (it would also require some changes in
 # the way broker methods are called in the `survivor.py` file)
 
 default:
   # ========================================================================
   # CORE TRADING PARAMETERS
   # ========================================================================
-  
+
   # Underlying index symbol for price tracking and trade triggers
   # This is the reference index whose price movements determine when to trade
   # TODO: Make sure this is correct as per the broker format
   index_symbol: "NSE:NIFTY 50" # "NSE:NIFTY50-INDEX"
-  
+
   # Option series identifier - must match current trading option series
   # Format: NIFTY + expiry date (e.g., NIFTY25807 for 25th Jan 2025, 07th strike series)
   # This identifies which specific option expiry series to trade
-  symbol_initials: "NIFTY26113" # "NIFTY25807"
-  
+  symbol_initials: "NIFTY26120" # "NIFTY25807"
+
   # ========================================================================
   # GAP PARAMETERS - TRADE TRIGGERING THRESHOLDS
   # ========================================================================
-  
+
   # Price movement threshold to trigger PE (Put) option sells
-  # When NIFTY rises by this many points above the PE reference value, 
+  # When NIFTY rises by this many points above the PE reference value,
   # the strategy will sell PE options
   # Example: If pe_gap=20 and NIFTY moves up 25 points, PE trade is triggered
-  pe_gap: 40
-  
-  # Price movement threshold to trigger CE (Call) option sells  
+  pe_gap: 30 # Price movement threshold to trigger CE (Call) option sells
+
   # When NIFTY falls by this many points below the CE reference value,
   # the strategy will sell CE options
   # Example: If ce_gap=20 and NIFTY moves down 25 points, CE trade is triggered
-  ce_gap: 40
-  
+  ce_gap: 30
+
   # ========================================================================
   # POSITION SIZING PARAMETERS
   # ========================================================================
-  
+
   # Base quantity for PE option trades - Multiple of Lot Size
   # Total quantity = pe_quantity × sell_multiplier
   # Example: If pe_quantity=75 and multiplier=2, total PE quantity = 150
   pe_quantity: 65
-  
+
   # Base quantity for CE option trades - Multiple of Lot Size
-  # Total quantity = ce_quantity × sell_multiplier  
+  # Total quantity = ce_quantity × sell_multiplier
   # Example: If ce_quantity=75 and multiplier=2, total CE quantity = 150
   ce_quantity: 65
-  
+
   # ========================================================================
   # STRIKE SELECTION PARAMETERS
   # ========================================================================
-  
+
   # Distance below current NIFTY price for PE strike selection
   # PE strikes are selected this many points below the current spot price
   # Example: If NIFTY=24500 and pe_symbol_gap=200, PE strikes around 24300 are selected
   pe_symbol_gap: 700
-  
+
   # Distance above current NIFTY price for CE strike selection
   # CE strikes are selected this many points above the current spot price
   # Example: If NIFTY=24500 and ce_symbol_gap=200, CE strikes around 24700 are selected
   ce_symbol_gap: 700
-  
+
   # ========================================================================
   # RISK MANAGEMENT PARAMETERS
   # ========================================================================
-  
+
   # Minimum option premium threshold for trade execution
   # Options with premium below this value will be skipped to avoid illiquid trades
   # Prevents trading very cheap options that may have poor liquidity
   min_price_to_sell: 15
-  
+
   # Maximum allowed position multiplier for risk control
   # Prevents excessive position sizes during large market moves
   # Example: If threshold=5 and calculated multiplier=6, trade will be blocked
   sell_multiplier_threshold: 1
-  
+
   # ========================================================================
   # REFERENCE RESET PARAMETERS
   # ========================================================================
-  
+
   # Favorable movement threshold to reset PE reference value
   # When NIFTY moves down by this amount after PE trades, the PE reference
   # is reset closer to current price to maintain strategy responsiveness
   # Example: If pe_reset_gap=30 and NIFTY drops 35 points after PE trade, reset occurs
   pe_reset_gap: 30
-  
+
   # Favorable movement threshold to reset CE reference value
   # When NIFTY moves up by this amount after CE trades, the CE reference
   # is reset closer to current price to maintain strategy responsiveness
   # Example: If ce_reset_gap=30 and NIFTY rises 35 points after CE trade, reset occurs
   ce_reset_gap: 30
-  
+
   # ========================================================================
   # STARTING REFERENCE POINTS
   # ========================================================================
-  
+
   # Initial PE reference value (0 = use current market price)
   # If 0: Uses current NIFTY price as starting reference
   # If specified: Uses that value as starting reference for PE tracking
   # Example: pe_start_point=24500 starts PE tracking from 24500
   pe_start_point: 0
-  
+
   # Initial CE reference value (0 = use current market price)
-  # If 0: Uses current NIFTY price as starting reference  
+  # If 0: Uses current NIFTY price as starting reference
   # If specified: Uses that value as starting reference for CE tracking
   # Example: ce_start_point=24500 starts CE tracking from 24500
-  ce_start_point: 26171.6
-  
+  ce_start_point: 0
+
   # ========================================================================
   # ORDER EXECUTION PARAMETERS
   # ========================================================================
-  
+
   # Transaction type for all orders (typically SELL for premium collection)
   # SELL: Sell options to collect premium (strategy default)
   # BUY: Buy options (not typically used in this strategy)
   trans_type: "SELL"
-  
+
   # Exchange for trading options (NFO = National Stock Exchange Futures & Options)
   exchange: "NFO"
-  
+
   # Order type for execution (MARKET = immediate execution at best available price)
   # MARKET: Immediate execution, no price guarantee
   # LIMIT: Execution only at specified price or better
   order_type: "MARKET"
-  
+
   # Product type for margin and position management
   # NRML: Normal margin
   # MIS: Margin Intraday Square-off
@@ -157,8 +156,9 @@ default:
   # RSI_ADX: Require RSI and ADX conditions to be met
   # EMA: Require price to be above/below EMA
   # BOTH: Require both sets of conditions
-  entry_filter_type: "NONE"
+  entry_filter_type: "EMA"
 
+  ##### RSI + ADX #####
   # RSI period for calculation (default: 14)
   rsi_period: 14
 
@@ -168,7 +168,7 @@ default:
 
   # Maximum RSI value for Bearish entry (Selling CE)
   # Only sell CE if RSI < rsi_max
-  rsi_max: 50
+  rsi_max: 40
 
   # ADX period for calculation (default: 14)
   adx_period: 14
@@ -176,6 +176,8 @@ default:
   # Minimum ADX value to confirm strong trend
   # Only trade if ADX > adx_threshold
   adx_threshold: 25
+
+  ##### EMA #####
 
   # EMA period for trend filter (default: 20)
   ema_period: 20

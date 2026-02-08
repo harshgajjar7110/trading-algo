@@ -318,6 +318,9 @@ class ZerodhaDriver(BrokerDriver):
             "60m": "60minute",
             "1d": "day",
             "day": "day",
+            "minute": "minute",
+            "1m": "minute",
+            "1minute": "minute",
         }
         key = interval.strip().lower()
         interval_kite = imap.get(key, None)

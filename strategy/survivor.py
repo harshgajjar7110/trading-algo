@@ -96,8 +96,8 @@ class SurvivorStrategy:
 
         if self.instruments.shape[0] == 0:
             logger.error(f"No instruments found for {self.symbol_initials}")
-            logger.error(f"Instument {self.symbol_initials} not found. Please check the symbol initials")
-            return
+            logger.error(f"Instrument {self.symbol_initials} not found. Please check the symbol initials")
+            raise ValueError(f"No instruments found for {self.symbol_initials}. Cannot initialize SurvivorStrategy.")
         
         self.strike_difference = None      
         self._initialize_state()
@@ -115,7 +115,7 @@ class SurvivorStrategy:
 
     def _fetch_initial_history(self):
         """Fetch historical data to warm up indicators."""
-        if self.strat_var_entry_filter_type == "NONE":
+        if not self.strat_var_entry_filter_type or self.strat_var_entry_filter_type == "NONE":
             return
 
         logger.info("Fetching historical data for indicator initialization...")

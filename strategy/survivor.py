@@ -234,8 +234,8 @@ class SurvivorStrategy:
         if self.strat_var_entry_filter_type in ["RSI_ADX", "BOTH"]:
             period = self.strat_var_rsi_period
             delta = df['close'].diff()
-            gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
-            loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+            gain = (delta.where(delta > 0, 0)).ewm(alpha=1/period, adjust=False).mean()
+            loss = (-delta.where(delta < 0, 0)).ewm(alpha=1/period, adjust=False).mean()
             rs = gain / loss
             df['rsi'] = 100 - (100 / (1 + rs))
             results['rsi'] = df['rsi'].iloc[-1]
@@ -394,8 +394,15 @@ class SurvivorStrategy:
         """
         current_price = ticks['last_price'] if 'last_price' in ticks else ticks['ltp']
         
+        # Try to extract timestamp from tick data for accurate candle formation
+        current_ts = None
+        if 'exchange_timestamp' in ticks and ticks['exchange_timestamp']:
+            ts_val = ticks['exchange_timestamp']
+            if hasattr(ts_val, 'timestamp'):
+                current_ts = ts_val.timestamp()
+
         # Update historical data for indicators
-        self._update_history(current_price)
+        self._update_history(current_price, current_ts)
 
         # Process trading opportunities for both sides
         self._handle_pe_trade(current_price)  # Handle Put option opportunities

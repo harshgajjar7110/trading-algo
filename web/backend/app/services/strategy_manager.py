@@ -261,8 +261,49 @@ class StrategyManager:
             self._last_update = datetime.utcnow()
             
         elif update.get('type') == 'ERROR':
-            self._error_message = update.get('message')
+            error_message = update.get('message', 'Unknown error')
+            self._error_message = error_message
             self._status = StrategyStatus.ERROR
+            
+            # Check for insufficient funds or margin errors
+            insufficient_fund_keywords = [
+                'insufficient',
+                'margin',
+                'funds',
+                'balance',
+                'exposure',
+                'limit exceeded',
+                'not enough',
+                'margin shortfall'
+            ]
+            
+            error_lower = error_message.lower()
+            is_insufficient_funds = any(keyword in error_lower for keyword in insufficient_fund_keywords)
+            
+            if is_insufficient_funds:
+                print(f"[StrategyManager] Insufficient funds detected: {error_message}")
+                print("[StrategyManager] Stopping strategy due to insufficient funds...")
+                # Stop the strategy process
+                self._stop_on_error(f"INSUFFICIENT FUNDS: {error_message}")
+    
+    def _stop_on_error(self, error_message: str) -> None:
+        """Stop the strategy due to a critical error."""
+        try:
+            if self._process and self._process.is_alive():
+                self._process.terminate()
+                self._process.join(timeout=5)
+                
+                if self._process.is_alive():
+                    self._process.kill()
+                    self._process.join()
+            
+            self._process = None
+            self._status = StrategyStatus.ERROR
+            self._error_message = error_message
+            self._start_time = None
+            
+        except Exception as e:
+            print(f"[StrategyManager] Error stopping strategy: {e}")
     
     @staticmethod
     def _run_strategy_process(state_queue: multiprocessing.Queue) -> None:

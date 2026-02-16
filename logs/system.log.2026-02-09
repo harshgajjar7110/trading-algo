@@ -1,0 +1,15 @@
+DEBUG - logger.py:42 - setup_logging Logging is set up.
+DEBUG - logger.py:42 - setup_logging Logging is set up.
+INFO - survivor.py:1404 - <module> Using default configuration from C:\Users\harsh\Documents\hobby-project\trading-algo\strategy\configs/survivor.yml
+INFO - survivor.py:1407 - <module> Trading Configuration:
+INFO - survivor.py:1408 - <module>   Symbol: NIFTY26120, Exchange: NFO
+INFO - survivor.py:1409 - <module>   Gap Triggers - PE: 30, CE: 30
+INFO - survivor.py:1410 - <module>   Strike Selection - PE: -700, CE: +700
+INFO - survivor.py:1411 - <module>   Base Quantities - PE: 65, CE: 65
+DEBUG - logger.py:42 - setup_logging Logging is set up.
+INFO - survivor.py:1404 - <module> Using default configuration from C:\Users\harsh\Documents\hobby-project\trading-algo\strategy\configs/survivor.yml
+INFO - survivor.py:1407 - <module> Trading Configuration:
+INFO - survivor.py:1408 - <module>   Symbol: NIFTY26120, Exchange: NFO
+INFO - survivor.py:1409 - <module>   Gap Triggers - PE: 30, CE: 30
+INFO - survivor.py:1410 - <module>   Strike Selection - PE: -700, CE: +700
+INFO - survivor.py:1411 - <module>   Base Quantities - PE: 65, CE: 65

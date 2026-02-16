@@ -30,7 +30,7 @@ default:
   # Option series identifier - must match current trading option series
   # Format: NIFTY + expiry date (e.g., NIFTY25807 for 25th Jan 2025, 07th strike series)
   # This identifies which specific option expiry series to trade
-  symbol_initials: "NIFTY26FEB24" # "NIFTY25807"
+  symbol_initials: "NIFTY26FEB" # "NIFTY25807"
   
   # ========================================================================
   # GAP PARAMETERS - TRADE TRIGGERING THRESHOLDS
@@ -114,13 +114,13 @@ default:
   # If 0: Uses current NIFTY price as starting reference
   # If specified: Uses that value as starting reference for PE tracking
   # Example: pe_start_point=24500 starts PE tracking from 24500
-  pe_start_point: 25859
+  pe_start_point: 0
   
   # Initial CE reference value (0 = use current market price)
   # If 0: Uses current NIFTY price as starting reference  
   # If specified: Uses that value as starting reference for CE tracking
   # Example: ce_start_point=24500 starts CE tracking from 24500
-  ce_start_point: 25859
+  ce_start_point: 0
   
   # ========================================================================
   # ORDER EXECUTION PARAMETERS

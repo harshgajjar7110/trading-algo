@@ -1,0 +1,22 @@
+# Survivor Trading Strategy - Backend Dependencies
+
+# FastAPI and server
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+python-multipart>=0.0.6
+
+# Pydantic for settings
+pydantic>=2.5.0
+pydantic-settings>=2.1.0
+
+# WebSocket support
+websockets>=12.0
+
+# YAML configuration
+pyyaml>=6.0.1
+
+# HTTP client
+httpx>=0.25.0
+
+# Environment variables
+python-dotenv>=1.0.0

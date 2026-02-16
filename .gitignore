@@ -13,3 +13,17 @@ strategy/configs/.wave.yml.swp
 brokers/.DS_Store
 .cache/zerodha_master_contract.csv
 wave_new.py
+
+# Web frontend
+web/frontend/node_modules/
+web/frontend/.next/
+web/frontend/out/
+web/frontend/.pnp
+web/frontend/.pnp.js
+
+# Backend
+web/backend/venv/
+web/backend/__pycache__/
+
+# Dependencies
+node_modules/

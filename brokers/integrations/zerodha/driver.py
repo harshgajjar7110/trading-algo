@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 import os
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 from urllib import request
 
@@ -20,6 +21,118 @@ from ...core.schemas import (
 from ...mappings import MappingRegistry as M
 import pandas as pd
 import numpy as np
+
+
+def _get_env_file_path() -> Path:
+    """Get the path to the .env file in project root."""
+    # Navigate up from this file to find project root (where .env would be)
+    current = Path(__file__).resolve()
+    # Go up: integrations/zerodha -> integrations -> brokers -> trading-algo (project root)
+    for _ in range(4):
+        current = current.parent
+        if (current / ".env").exists():
+            return current / ".env"
+    # Fallback: create in current working directory
+    return Path.cwd() / ".env"
+
+
+def _save_refresh_token_to_env(refresh_token: str) -> None:
+    """Save refresh token to .env file."""
+    env_path = _get_env_file_path()
+    
+    # Read existing content
+    existing_content = ""
+    if env_path.exists():
+        with open(env_path, "r") as f:
+            existing_content = f.read()
+    
+    lines = existing_content.splitlines()
+    new_lines = []
+    refresh_token_found = False
+    
+    for line in lines:
+        if line.startswith("BROKER_REFRESH_TOKEN="):
+            new_lines.append(f"BROKER_REFRESH_TOKEN={refresh_token}")
+            refresh_token_found = True
+        else:
+            new_lines.append(line)
+    
+    if not refresh_token_found:
+        # Add refresh token after other broker config
+        broker_lines = [l for l in lines if l.startswith("BROKER_")]
+        if broker_lines:
+            # Insert after last BROKER_ line
+            last_broker_idx = max(i for i, l in enumerate(lines) if l.startswith("BROKER_"))
+            new_lines = lines[:last_broker_idx + 1] + [f"BROKER_REFRESH_TOKEN={refresh_token}"] + lines[last_broker_idx + 1:]
+        else:
+            new_lines.append(f"BROKER_REFRESH_TOKEN={refresh_token}")
+    
+    # Write back
+    with open(env_path, "w") as f:
+        f.write("\n".join(new_lines) + "\n")
+    
+    print(f"[ZerodhaDriver] Refresh token saved to {env_path}")
+
+
+def _save_access_token_to_env(access_token: str) -> None:
+    """Save access token to .env file."""
+    env_path = _get_env_file_path()
+    
+    # Read existing content
+    existing_content = ""
+    if env_path.exists():
+        with open(env_path, "r") as f:
+            existing_content = f.read()
+    
+    lines = existing_content.splitlines()
+    new_lines = []
+    access_token_found = False
+    
+    for line in lines:
+        if line.startswith("BROKER_ACCESS_TOKEN="):
+            new_lines.append(f"BROKER_ACCESS_TOKEN={access_token}")
+            access_token_found = True
+        else:
+            new_lines.append(line)
+    
+    if not access_token_found:
+        # Add access token after other broker config
+        broker_lines = [l for l in lines if l.startswith("BROKER_")]
+        if broker_lines:
+            # Insert after last BROKER_ line
+            last_broker_idx = max(i for i, l in enumerate(lines) if l.startswith("BROKER_"))
+            new_lines = lines[:last_broker_idx + 1] + [f"BROKER_ACCESS_TOKEN={access_token}"] + lines[last_broker_idx + 1:]
+        else:
+            new_lines.append(f"BROKER_ACCESS_TOKEN={access_token}")
+    
+    # Write back
+    with open(env_path, "w") as f:
+        f.write("\n".join(new_lines) + "\n")
+    
+    print(f"[ZerodhaDriver] Access token saved to {env_path}")
+
+
+def _prompt_for_refresh_token() -> Optional[str]:
+    """Prompt user to enter refresh token via console."""
+    print("\n" + "=" * 60)
+    print("ZERODHA AUTHENTICATION - Refresh Token Required")
+    print("=" * 60)
+    print("\nTo get your refresh token:")
+    print("1. Login to Kite (kite.zerodha.com) in your browser")
+    print("2. After login, go to Profile > API")
+    print("3. Or use the TOTP login flow once to generate a refresh token")
+    print("\nAlternatively, enter your refresh token below (or press Enter to skip):")
+    
+    try:
+        refresh_token = input("Refresh Token: ").strip()
+        if refresh_token:
+            # Save it to .env
+            _save_refresh_token_to_env(refresh_token)
+            return refresh_token
+    except (EOFError, KeyboardInterrupt):
+        print("\n[ZerodhaDriver] Skipping refresh token input")
+    
+    return None
 
 class ZerodhaDriver(BrokerDriver):
     """Zerodha driver using kiteconnect when available.
@@ -52,6 +165,7 @@ class ZerodhaDriver(BrokerDriver):
         )
         self._kite = None  # kiteconnect client if available
         self._kite_ws = None
+        self.master_contract_df = None  # Initialize master_contract_df
 
         # Try to wire a ready KiteConnect if env provides api_key + access_token
         import os
@@ -69,46 +183,52 @@ class ZerodhaDriver(BrokerDriver):
             except Exception:
                 self._kite = None
 
-        # Optional TOTP login if requested and tokens missing
+        # Manual login: use API key + secret to get login URL, then exchange request token for access token
         if self._kite is None:
-            login_mode = (os.getenv("BROKER_LOGIN_MODE") or "auto").lower()
-            if login_mode in ("totp", "auto"):
-                kite_totp = self._authenticate_via_totp()
-                if kite_totp is not None:
-                    self._kite = kite_totp
+            try:  # pragma: no cover - interactive
+                from kiteconnect import KiteConnect  # type: ignore
+                from ...auth.manual import manual_exchange_request_token
 
-        # Optional manual login if no token and login_mode permits
-        if self._kite is None:
-            login_mode = (os.getenv("BROKER_LOGIN_MODE") or "auto").lower()
-            if login_mode in ("manual", "auto"):
-                try:  # pragma: no cover - interactive
-                    from kiteconnect import KiteConnect  # type: ignore
-                    from ...auth.manual import manual_exchange_request_token
-
-                    api_key2 = api_key or os.getenv("KITE_API_KEY") or os.getenv("ZERODHA_API_KEY")
-                    api_secret = os.getenv("BROKER_API_SECRET") or os.getenv("KITE_API_SECRET") or os.getenv("ZERODHA_API_SECRET")
-                    if api_key2 and api_secret:
-                        kite2 = KiteConnect(api_key=api_key2)
-                        url = kite2.login_url()
-                        request_token = manual_exchange_request_token(url)
-                        sess = kite2.generate_session(request_token, api_secret)
-                        token = sess.get("access_token")
-                        if token:
-                            kite2.set_access_token(token)
-                            self._kite = kite2
-                except Exception:
-                    # Keep unauthenticated if manual flow fails
-                    pass
+                api_key2 = api_key or os.getenv("KITE_API_KEY") or os.getenv("ZERODHA_API_KEY")
+                api_secret = os.getenv("BROKER_API_SECRET") or os.getenv("KITE_API_SECRET") or os.getenv("ZERODHA_API_SECRET")
+                if api_key2 and api_secret:
+                    kite2 = KiteConnect(api_key=api_key2)
+                    url = kite2.login_url()
+                    print(f"\n" + "=" * 60)
+                    print("ZERODHA MANUAL LOGIN")
+                    print("=" * 60)
+                    print(f"\n1. Open this URL in your browser:\n{url}\n")
+                    print("2. Login with your Zerodha credentials")
+                    print("3. After login, you will be redirected to a page with 'request_token'")
+                    print("4. Copy the request_token value from the URL and paste below\n")
+                    request_token = manual_exchange_request_token(url)
+                    sess = kite2.generate_session(request_token, api_secret)
+                    token = sess.get("access_token")
+                    if token:
+                        kite2.set_access_token(token)
+                        self._kite = kite2
+                        print("[ZerodhaDriver] Authentication successful!")
+                        # Save access token to .env for future use
+                        _save_access_token_to_env(token)
+            except Exception as e:
+                # Keep unauthenticated if manual flow fails
+                print(f"[ZerodhaDriver] Manual login failed: {e}")
+                pass
 
     def _authenticate_via_totp(self) -> Optional[Any]:
         """Programmatic TOTP login using Zerodha web endpoints to obtain access token.
 
+        First checks for existing refresh token in env vars. If found, uses it to
+        get a new access token. Otherwise, performs full TOTP login and saves the
+        refresh token to .env for future use.
+
         Requires env vars:
         - BROKER_API_KEY (or KITE_API_KEY/ZERODHA_API_KEY)
         - BROKER_API_SECRET (or KITE_API_SECRET/ZERODHA_API_SECRET)
-        - BROKER_ID
-        - BROKER_TOTP_KEY
-        - BROKER_PASSWORD
+        - BROKER_ID (for TOTP login)
+        - BROKER_TOTP_KEY (for TOTP login)
+        - BROKER_PASSWORD (for TOTP login)
+        - BROKER_REFRESH_TOKEN (optional - if provided, skips TOTP login)
         """
         import os
         try:  # pragma: no cover - external packages
@@ -120,12 +240,35 @@ class ZerodhaDriver(BrokerDriver):
 
         api_key = os.getenv("BROKER_API_KEY") or os.getenv("KITE_API_KEY") or os.getenv("ZERODHA_API_KEY")
         api_secret = os.getenv("BROKER_API_SECRET") or os.getenv("KITE_API_SECRET") or os.getenv("ZERODHA_API_SECRET")
+        
+        if not all([api_key, api_secret]):
+            return None
+
+        # Step 1: Check for existing refresh token
+        refresh_token = os.getenv("BROKER_REFRESH_TOKEN")
+        if refresh_token:
+            print("[ZerodhaDriver] Found refresh token in env, attempting to get new access token...")
+            kite = self._try_refresh_token(api_key, api_secret, refresh_token)
+            if kite:
+                return kite
+            print("[ZerodhaDriver] Refresh token failed, falling back to TOTP login...")
+
+        # Step 2: Check for TOTP credentials
         broker_id = os.getenv("BROKER_ID")
         totp_secret = os.getenv("BROKER_TOTP_KEY")
         password = os.getenv("BROKER_PASSWORD")
-        if not all([api_key, api_secret, broker_id, totp_secret, password]):
+        
+        if not all([broker_id, totp_secret, password]):
+            # Try prompting for refresh token via console
+            print("[ZerodhaDriver] Missing TOTP credentials (BROKER_ID, BROKER_TOTP_KEY, BROKER_PASSWORD)")
+            refresh_token = _prompt_for_refresh_token()
+            if refresh_token:
+                kite = self._try_refresh_token(api_key, api_secret, refresh_token)
+                if kite:
+                    return kite
             return None
 
+        # Step 3: Perform full TOTP login
         try:
             session = requests.Session()
             login_resp = session.post(
@@ -163,8 +306,62 @@ class ZerodhaDriver(BrokerDriver):
             if not access_token:
                 return None
             kite.set_access_token(access_token)
+            
+            # Save refresh token for future use
+            new_refresh_token = sess.get("refresh_token")
+            if new_refresh_token:
+                _save_refresh_token_to_env(new_refresh_token)
+                print("[ZerodhaDriver] Authentication successful, refresh token saved to .env")
+            
             return kite
-        except Exception:
+        except Exception as e:
+            print(f"[ZerodhaDriver] TOTP login failed: {e}")
+            return None
+
+    def _try_refresh_token(self, api_key: str, api_secret: str, refresh_token: str) -> Optional[Any]:
+        """Try to get a new access token using refresh token.
+        
+        Note: KiteConnect doesn't have a direct refresh token API. The refresh token
+        is used to get a new request token via the Kite web session.
+        """
+        try:  # pragma: no cover
+            import requests  # type: ignore
+            from kiteconnect import KiteConnect  # type: ignore
+            
+            # Create a session with the refresh token
+            session = requests.Session()
+            
+            # Set up cookies with the refresh token
+            # The refresh token works as a session cookie for kite.zerodha.com
+            session.cookies.set("enctoken", refresh_token, domain=".zerodha.com")
+            
+            # Try to access the connect endpoint to get a new request token
+            connect_url = f"https://kite.trade/connect/login?api_key={api_key}"
+            connect_resp = session.get(connect_url, allow_redirects=True, timeout=30)
+            
+            if "request_token=" in connect_resp.url:
+                request_token = connect_resp.url.split("request_token=")[1].split("&")[0]
+                
+                kite = KiteConnect(api_key=api_key)
+                sess = kite.generate_session(request_token, api_secret)
+                access_token = sess.get("access_token")
+                
+                if access_token:
+                    kite.set_access_token(access_token)
+                    print("[ZerodhaDriver] Successfully obtained access token from refresh token")
+                    
+                    # Save new refresh token if provided
+                    new_refresh_token = sess.get("refresh_token")
+                    if new_refresh_token and new_refresh_token != refresh_token:
+                        _save_refresh_token_to_env(new_refresh_token)
+                    
+                    return kite
+            
+            print("[ZerodhaDriver] Could not get request token from refresh token")
+            return None
+            
+        except Exception as e:
+            print(f"[ZerodhaDriver] Refresh token authentication failed: {e}")
             return None
 
     # --- Account ---
@@ -187,9 +384,15 @@ class ZerodhaDriver(BrokerDriver):
         try:
             pos = self._kite.positions()
             combined: List[Position] = []
-            for p in pos.get("day", []) + pos.get("net", []):
-                exchange = Exchange[p.get("exchange", "NSE").upper()]
+            # Use 'net' positions only to avoid double counting
+            # 'net' contains the overall position including day trades
+            for p in pos.get("net", []):
+                # Skip positions with zero quantity
                 quantity_total = int(p.get("quantity", 0))
+                if quantity_total == 0:
+                    continue
+                    
+                exchange = Exchange[p.get("exchange", "NSE").upper()]
                 quantity_available = int(p.get("quantity", 0)) - int(p.get("overnight_quantity", 0))
                 avg_price = float(p.get("average_price", 0))
                 pnl = float(p.get("pnl", 0))
@@ -369,6 +572,23 @@ class ZerodhaDriver(BrokerDriver):
 
     # --- Instruments ---
     def download_instruments(self) -> None:
+        self.cache_file = ".cache/zerodha_master_contract.csv"
+        
+        # Try to load from cache first
+        if os.path.exists(self.cache_file):
+            try:
+                self.master_contract_df = pd.read_csv(self.cache_file)
+                self.master_contract_df['expiry'] = pd.to_datetime(self.master_contract_df['expiry']).dt.date
+                return  # Successfully loaded from cache
+            except Exception as e:
+                print(f"Warning: Failed to load instruments from cache: {e}")
+                self.master_contract_df = None
+        
+        # If cache doesn't exist or failed to load, fetch from API
+        if not self._kite:
+            print("Warning: No kite connection and no cache available for instruments")
+            return
+        
         df = pd.DataFrame(self._kite.instruments())
         columns = ["instrument_token", "exchange_token", "tradingsymbol", "name", "last_price", "expiry", "strike", "tick_size", "lot_size", "instrument_type", "segment", "exchange"]
         header_mapping = {
@@ -390,13 +610,19 @@ class ZerodhaDriver(BrokerDriver):
         df['expiry'] = pd.to_datetime(df['expiry']).dt.date
         df['days_to_expiry'] = df['expiry'].apply(lambda x: np.busday_count(datetime.now().date(), x) + 1 if not pd.isna(x) else np.nan)
         self.master_contract_df = df
-        self.cache_file = ".cache/zerodha_master_contract.csv"
-        if not os.path.exists(os.path.dirname(self.cache_file)):
-            os.makedirs(os.path.dirname(self.cache_file))
-        df.to_csv(self.cache_file, index=False)
-        return df
+        
+        # Save to cache
+        try:
+            if not os.path.exists(os.path.dirname(self.cache_file)):
+                os.makedirs(os.path.dirname(self.cache_file))
+            df.to_csv(self.cache_file, index=False)
+        except Exception as e:
+            print(f"Warning: Failed to save instruments to cache: {e}")
 
     def get_instruments(self) -> List[Instrument]:
+        if self.master_contract_df is None:
+            # Try to download if not already done
+            self.download_instruments()
         return self.master_contract_df
 
     # --- Option chain ---
@@ -721,3 +947,6 @@ class ZerodhaDriver(BrokerDriver):
 
         except Exception as e:
             return OrderResponse(status="error", order_id=None, message=str(e))
+
+
+

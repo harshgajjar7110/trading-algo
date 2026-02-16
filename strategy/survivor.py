@@ -3,11 +3,6 @@ import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import yaml
-import traceback
-import pandas as pd
-import numpy as np
-import json
-from datetime import datetime, timedelta
 from logger import logger
 from brokers import BrokerGateway, OrderRequest, Exchange, OrderType, TransactionType, ProductType
 
@@ -96,9 +91,8 @@ class SurvivorStrategy:
 
         if self.instruments.shape[0] == 0:
             logger.error(f"No instruments found for {self.symbol_initials}")
-            logger.error(f"Instrument {self.symbol_initials} not found. Please check the symbol initials")
-            raise ValueError(f"No instruments found for {self.symbol_initials}. Cannot initialize SurvivorStrategy.")
-        
+            logger.error(f"Instument {self.symbol_initials} not found. Please check the symbol initials")
+            return
         self.strike_difference = None      
         self._initialize_state()
         self.lot_size = self.instruments['lot_size'].iloc[0]
@@ -106,221 +100,6 @@ class SurvivorStrategy:
         # Calculate and store strike difference for the option series
         self.strike_difference = self._get_strike_difference(self.symbol_initials)
         logger.info(f"Strike difference for {self.symbol_initials} is {self.strike_difference}")
-
-        # Initialize Historical Data for Indicators
-        self.history_data = [] # List of minute candles
-        self.last_indicators = {} # Cache for logging
-        self.last_minute_processed = None
-        self._fetch_initial_history()
-
-    def _fetch_initial_history(self):
-        """Fetch historical data to warm up indicators."""
-        if not self.strat_var_entry_filter_type or self.strat_var_entry_filter_type == "NONE":
-            return
-
-        logger.info("Fetching historical data for indicator initialization...")
-        try:
-            end_date = datetime.now()
-            start_date = end_date - timedelta(days=self.strat_var_history_period_days)
-
-            # Format dates as expected by BrokerGateway (YYYY-MM-DD)
-            # BrokerGateway.get_history expects strict date strings and handles chunking
-            start_str = start_date.strftime("%Y-%m-%d")
-            end_str = end_date.strftime("%Y-%m-%d")
-
-            history = self.broker.get_history(
-                symbol=self.strat_var_index_symbol,
-                interval="1minute", # or "minute" depending on broker mapping
-                start=start_str,
-                end=end_str
-            )
-
-            if history:
-                # Normalize history data
-                # Zerodha/Kite Connect typically returns 'date' (datetime obj) or 'ts' (in driver normalization)
-                # Our driver implementation in `brokers/integrations/zerodha/driver.py` already normalizes history to:
-                # { "ts": int_timestamp, "close": float, ... }
-                # So we just need to ensure we don't break if 'date' is present but 'ts' isn't (though driver ensures 'ts').
-
-                normalized_history = []
-                for candle in history:
-                    if 'ts' not in candle:
-                        # Fallback if driver didn't normalize (shouldn't happen with our driver but good for safety)
-                        dt = candle.get('date')
-                        if dt:
-                            if hasattr(dt, 'timestamp'):
-                                candle['ts'] = int(dt.timestamp())
-                            else:
-                                # String parsing fallback if needed, but unlikely given driver
-                                pass
-                    normalized_history.append(candle)
-
-                self.history_data = normalized_history
-                logger.info(f"Loaded {len(normalized_history)} historical candles.")
-            else:
-                logger.warning("No historical data returned.")
-
-        except Exception as e:
-            logger.error(f"Error fetching historical data: {e}")
-
-    def _update_history(self, current_price, current_ts=None):
-        """Update history with current tick, managing candle formation (simplified rolling)."""
-        # For simplicity in this event-driven architecture without strict candle management,
-        # we will append the current tick as a 'close' if enough time has passed, or
-        # just maintain a list of closes.
-        # A robust way is to detect minute change.
-
-        if not current_ts:
-            current_ts = datetime.now().timestamp()
-
-        current_dt = datetime.fromtimestamp(current_ts)
-        current_minute = current_dt.replace(second=0, microsecond=0)
-
-        # If history is empty, start a new candle
-        if not self.history_data:
-            self.history_data.append({
-                'ts': current_minute.timestamp(),
-                'close': current_price,
-                'high': current_price,
-                'low': current_price,
-                'open': current_price
-            })
-            self.last_minute_processed = current_minute
-            return
-
-        last_candle = self.history_data[-1]
-        last_candle_ts = last_candle.get('ts')
-
-        if not last_candle_ts:
-             # Should not happen if data is clean
-             return
-
-        last_candle_dt = datetime.fromtimestamp(last_candle_ts)
-
-        if current_minute > last_candle_dt:
-             # New minute started, finalize previous and start new
-             self.history_data.append({
-                'ts': current_minute.timestamp(),
-                'close': current_price,
-                'high': current_price,
-                'low': current_price,
-                'open': current_price
-            })
-             # Keep history manageable (e.g., last 2000 candles)
-             if len(self.history_data) > 2000:
-                 self.history_data.pop(0)
-        else:
-            # Update current candle
-            self.history_data[-1]['close'] = current_price
-            self.history_data[-1]['high'] = max(self.history_data[-1]['high'], current_price)
-            self.history_data[-1]['low'] = min(self.history_data[-1]['low'], current_price)
-
-    def _calculate_indicators(self):
-        """Calculate RSI, ADX, EMA on self.history_data."""
-        if len(self.history_data) < 50: # Need enough data
-            return None
-
-        df = pd.DataFrame(self.history_data)
-
-        results = {}
-
-        # EMA
-        if self.strat_var_entry_filter_type in ["EMA", "BOTH"]:
-            period = self.strat_var_ema_period
-            df['ema'] = df['close'].ewm(span=period, adjust=False).mean()
-            results['ema'] = df['ema'].iloc[-1]
-
-        # RSI
-        if self.strat_var_entry_filter_type in ["RSI_ADX", "BOTH"]:
-            period = self.strat_var_rsi_period
-            delta = df['close'].diff()
-            gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
-            loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
-            rs = gain / loss
-            df['rsi'] = 100 - (100 / (1 + rs))
-            results['rsi'] = df['rsi'].iloc[-1]
-
-            # ADX (Simplified TR and DM calc for robustness without talib)
-            # True Range
-            df['h-l'] = df['high'] - df['low']
-            df['h-pc'] = abs(df['high'] - df['close'].shift(1))
-            df['l-pc'] = abs(df['low'] - df['close'].shift(1))
-            df['tr'] = df[['h-l', 'h-pc', 'l-pc']].max(axis=1)
-
-            # DM
-            df['up_move'] = df['high'] - df['high'].shift(1)
-            df['down_move'] = df['low'].shift(1) - df['low']
-
-            df['plus_dm'] = np.where((df['up_move'] > df['down_move']) & (df['up_move'] > 0), df['up_move'], 0)
-            df['minus_dm'] = np.where((df['down_move'] > df['up_move']) & (df['down_move'] > 0), df['down_move'], 0)
-
-            # Smoothed
-            alpha = 1/self.strat_var_adx_period
-            df['atr'] = df['tr'].ewm(alpha=alpha, adjust=False).mean()
-            df['plus_di'] = 100 * (df['plus_dm'].ewm(alpha=alpha, adjust=False).mean() / df['atr'])
-            df['minus_di'] = 100 * (df['minus_dm'].ewm(alpha=alpha, adjust=False).mean() / df['atr'])
-
-            df['dx'] = 100 * abs(df['plus_di'] - df['minus_di']) / (df['plus_di'] + df['minus_di'])
-            df['adx'] = df['dx'].ewm(alpha=alpha, adjust=False).mean()
-            results['adx'] = df['adx'].iloc[-1]
-
-        return results
-
-    def _check_entry_filter(self, signal_type, current_price):
-        """
-        Check if entry conditions are met based on configured filter.
-        signal_type: "PE" (Bullish Trade) or "CE" (Bearish Trade)
-        """
-        filter_type = self.strat_var_entry_filter_type
-
-        if filter_type == "NONE":
-            return True
-
-        indicators = self._calculate_indicators()
-        if not indicators:
-            logger.warning("Not enough data for indicators, skipping filter check (Defaulting to Allow)")
-            return True # Or False, depending on safety preference. Usually Allow to avoid blocking forever if data stream is young.
-
-        # Store for logging
-        self.last_indicators = indicators
-        allowed = True
-
-        if filter_type in ["EMA", "BOTH"]:
-            ema = indicators.get('ema')
-            if ema:
-                if signal_type == "PE": # Bullish Trade -> Price > EMA
-                    if not (current_price > ema):
-                        logger.debug(f"EMA Filter Blocked PE: Price {current_price} <= EMA {ema}")
-                        allowed = False
-                elif signal_type == "CE": # Bearish Trade -> Price < EMA
-                    if not (current_price < ema):
-                        logger.debug(f"EMA Filter Blocked CE: Price {current_price} >= EMA {ema}")
-                        allowed = False
-
-        if filter_type in ["RSI_ADX", "BOTH"]:
-            rsi = indicators.get('rsi')
-            adx = indicators.get('adx')
-
-            if rsi and adx:
-                # ADX Check
-                if adx < self.strat_var_adx_threshold:
-                    logger.debug(f"ADX Filter Blocked: ADX {adx} < Threshold {self.strat_var_adx_threshold}")
-                    allowed = False
-
-                # RSI Check
-                if signal_type == "PE": # Bullish Trade -> RSI > Min (Strong Momentum)
-                    if rsi <= self.strat_var_rsi_min:
-                        logger.debug(f"RSI Filter Blocked PE: RSI {rsi} <= Min {self.strat_var_rsi_min}")
-                        allowed = False
-                elif signal_type == "CE": # Bearish Trade -> RSI < Max?
-                    # Wait, usually Trend Following Bearish means RSI is Low (< 50) or RSI is Falling?
-                    # Config says "rsi_max". If we are selling CE (Bearish), we want momentum DOWN.
-                    # So RSI should be < 50 (or whatever max is set).
-                    if rsi >= self.strat_var_rsi_max:
-                         logger.debug(f"RSI Filter Blocked CE: RSI {rsi} >= Max {self.strat_var_rsi_max}")
-                         allowed = False
-
-        return allowed
 
     def _nifty_quote(self):
         symbol_code = self.strat_var_index_symbol
@@ -394,9 +173,6 @@ class SurvivorStrategy:
         """
         current_price = ticks['last_price'] if 'last_price' in ticks else ticks['ltp']
         
-        # Update historical data for indicators
-        self._update_history(current_price)
-
         # Process trading opportunities for both sides
         self._handle_pe_trade(current_price)  # Handle Put option opportunities
         self._handle_ce_trade(current_price)  # Handle Call option opportunities
@@ -455,19 +231,6 @@ class SurvivorStrategy:
         # Calculate price difference and check if it exceeds gap threshold
         price_diff = round(current_price - self.nifty_pe_last_value, 0)
         if price_diff > self.strat_var_pe_gap:
-            # Check Entry Filter
-            if not self._check_entry_filter("PE", current_price):
-                # We do NOT update the reference value here if filter fails,
-                # effectively skipping this 'gap' opportunity.
-                # OR do we update reference but skip trade?
-                # If we skip update, the gap will remain huge, and next tick will trigger again?
-                # Usually in this grid logic, if you miss a level, you might want to skip it entirely
-                # or wait.
-                # Let's simple LOG and RETURN. The reference value stays same.
-                # Next tick, if condition persists, it will try again.
-                # Ideally, if filter blocks, we treat it as "market moved but not safe to enter".
-                return
-
             # Calculate multiplier for position sizing
             sell_multiplier = int(price_diff / self.strat_var_pe_gap)
             
@@ -507,14 +270,7 @@ class SurvivorStrategy:
                     
                 # Execute the trade
                 logger.info(f"Execute PE sell @ {instrument['symbol']} × {total_quantity}, Market Price")
-                self._place_order(
-                    symbol=instrument['symbol'],
-                    quantity=total_quantity,
-                    entry_price=quote.last_price,
-                    index_price=current_price,
-                    gap_level=sell_multiplier,
-                    filter_type="PE Gap Level"
-                )
+                self._place_order(instrument['symbol'], total_quantity)
                 
                 # Set reset flag to enable reset logic
                 self.pe_reset_gap_flag = 1
@@ -552,10 +308,6 @@ class SurvivorStrategy:
         # Calculate price difference and check if it exceeds gap threshold
         price_diff = round(self.nifty_ce_last_value - current_price, 0)  
         if price_diff > self.strat_var_ce_gap:
-            # Check Entry Filter
-            if not self._check_entry_filter("CE", current_price):
-                return
-
             # Calculate multiplier for position sizing
             sell_multiplier = int(price_diff / self.strat_var_ce_gap)
             
@@ -594,14 +346,7 @@ class SurvivorStrategy:
                     
                 # Execute the trade
                 logger.info(f"Execute CE sell @ {instrument['symbol']} × {total_quantity}, Market Price")
-                self._place_order(
-                    symbol=instrument['symbol'],
-                    quantity=total_quantity,
-                    entry_price=quote.last_price,
-                    index_price=current_price,
-                    gap_level=sell_multiplier,
-                    filter_type="CE Gap Level"
-                )
+                self._place_order(instrument['symbol'], total_quantity)
                 
                 # Set reset flag to enable reset logic
                 self.ce_reset_gap_flag = 1
@@ -682,6 +427,7 @@ class SurvivorStrategy:
         target_strike = ltp + symbol_gap
         
         # Filter instruments for matching criteria
+        print(self.instruments[['symbol', 'strike', 'instrument_type']]);
         df = self.instruments[
             (self.instruments['symbol'].str.contains(self.strat_var_symbol_initials)) &
             (self.instruments['instrument_type'] == option_type) &
@@ -750,17 +496,13 @@ class SurvivorStrategy:
             else:
                 return instrument
 
-    def _place_order(self, symbol, quantity, entry_price=None, index_price=None, gap_level=None, filter_type=None):
+    def _place_order(self, symbol, quantity):
         """
         Execute order placement through the broker
         
         Args:
             symbol (str): Trading symbol for the option
             quantity (int): Number of lots/shares to trade
-            entry_price (float, optional): Estimated entry price for reference
-            index_price (float, optional): Underlying index price for reference
-            gap_level (int, optional): The gap multiplier level
-            filter_type (str, optional): The gap/filter type string
             
         Process:
         1. Place market order through broker interface
@@ -780,138 +522,41 @@ class SurvivorStrategy:
         if self.strat_var_exchange == "NFO":
             exchange = Exchange.NFO
 
-        logger.info(f"Constructing OrderRequest: symbol={symbol}, qty={quantity}, type=SELL, market=MARKET")
-
         req = OrderRequest(
                 symbol=symbol, exchange=exchange, transaction_type=TransactionType.SELL,
                 quantity=quantity, product_type=ProductType.MARGIN, order_type=OrderType.MARKET,
                 price=0, tag=self.strat_var_tag
             )
-        
-        try:
-            order_resp = self.broker.place_order(req)
-            order_status = order_resp.status
-            logger.debug(f"Order placement response: {order_resp}")
-            order_id = order_resp.order_id
-    
-            # Handle order placement failure
-            if order_id == -1 or order_status == "error":
-                logger.error(f"Order placement failed for {symbol} × {quantity}, Market Price")
-                exit()
-                return
+        order_resp = self.broker.place_order(req)
+        order_status = order_resp.status
+        logger.debug(f"Order placement response: {order_resp}")
+        order_id = order_resp.order_id
 
-            # Note: In a real scenario, we should verify the order state (e.g. FILLED) 
-            # via a separate status check before tracking it as a risk. 
-            # For now, we assume successful submission implies potential risk.
-                
-            logger.info(f"Placing order for {symbol} × {quantity}, Market Price")
-            
-            # Track the order using OrderTracker
-            from datetime import datetime
-            order_details = {
-                "order_id": order_id,
-                "symbol": symbol,
-                "transaction_type": self.strat_var_trans_type,
-                "quantity": quantity,
-                "price": None,  # Market order execution price is unknown at this sync point
-                "entry_price": entry_price, # Store reference price for Hard Deck
-                "timestamp": datetime.now().isoformat(),
-            }
-            
-            # Add to order tracking system
-            if self.order_tracker:
-                self.order_tracker.add_order(order_details)
-            
-            # Log order placement for strategy tracking
-            logger.info(f"Survivor order tracked: {order_id} - {self.strat_var_trans_type} {symbol} × {quantity} (Ref: {entry_price})")
-
-            # ------------------------------------------------------------------
-            # HARD DECK IMPLEMENTATION: GTT OCO (SL + Target)
-            # ------------------------------------------------------------------
-            gtt_status = "Skipped"
-            # Immediately place a GTT OCO order if entry_price is available
-            if entry_price and entry_price > 0:
-                try:
-                    self._place_gtt_oco(symbol, quantity, entry_price)
-                    gtt_status = "Success"
-                except Exception as e:
-                    gtt_status = f"Failed: {str(e)}"
-                    logger.error(f"GTT OCO Failed: {e}")
-
-            # Construct Entry Condition String
-            # e.g. "PE Gap Level 1 + EMA"
-            entry_condition = f"{filter_type} {gap_level}" if filter_type and gap_level else "Unknown"
-            if self.strat_var_entry_filter_type != "NONE":
-                entry_condition += f" + {self.strat_var_entry_filter_type}"
-
-            # Structured JSON Logging
-            self._log_trade_to_file({
-                "order_id": str(order_id),
-                "symbol": symbol,
-                "transaction_type": self.strat_var_trans_type,
-                "quantity": quantity,
-                "entry_price_ref": entry_price,
-                "index_price": index_price,
-                "entry_condition": entry_condition,
-                "gtt_status": gtt_status,
-                "indicators": self.last_indicators,
-                "timestamp": datetime.now().isoformat()
-            })
-
-        except Exception as e:
-            logger.error(f"Exception during order placement: {e}")
+        # Handle order placement failure
+        if order_id == -1 or order_status == "error":
+            logger.error(f"Order placement failed for {symbol} × {quantity}, Market Price")
             exit()
-
-    def _log_trade_to_file(self, trade_data):
-        """Append trade details to a JSONL file for analysis."""
-        try:
-            log_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "artifacts")
-            if not os.path.exists(log_dir):
-                os.makedirs(log_dir)
-
-            log_file = os.path.join(log_dir, "survivor_trades.jsonl")
-
-            with open(log_file, "a") as f:
-                f.write(json.dumps(trade_data) + "\n")
-
-            logger.info(f"Trade logged to {log_file}")
-
-        except Exception as e:
-            logger.error(f"Failed to log trade to JSON: {e}")
-
-    def _place_gtt_oco(self, symbol, quantity, entry_price):
-        """
-        Place a GTT OCO (One Cancels Other) order for SL and Target.
-        Logic:
-        - Stop Loss: 30% increase in price (since we sold).
-        - Profit Target: 60% decrease in price.
-        """
-        # 30% Stop Loss (Price rises 30%)
-        sl_trigger = round(entry_price * 1.30, 1)
-        sl_limit = round(sl_trigger * 1.02, 1) # 2% buffer for execution
-
-        # 60% Profit Target (Price falls 60%)
-        target_trigger = round(entry_price * 0.40, 1) # 100% - 60% = 40% remaining
-        target_limit = round(target_trigger * 0.98, 1) # 2% buffer for execution (lower than trigger for Buy)
-
-        logger.info(f"Placing GTT OCO for {symbol}: Entry {entry_price}")
-        logger.info(f"  > SL Trigger: {sl_trigger}, Limit: {sl_limit}")
-        logger.info(f"  > Target Trigger: {target_trigger}, Limit: {target_limit}")
-
-        self.broker.place_gtt_oco_order(
-            symbol=symbol,
-            exchange=self.strat_var_exchange,
-            product="NRML",
-            transaction_type="BUY", # We sold to open, so we BUY to close
-            quantity=quantity,
-            stop_loss_trigger=sl_trigger,
-            stop_loss_limit=sl_limit,
-            target_trigger=target_trigger,
-            target_limit=target_limit,
-            tag="GTT OCO SL/Target"
-        )
-
-        logger.info(f"GTT OCO Signal Sent for {symbol}")
+            return
+            
+        logger.info(f"Placing order for {symbol} × {quantity}, Market Price")
+        
+        # Track the order using OrderTracker
+        from datetime import datetime
+        order_details = {
+            "order_id": order_id,
+            "symbol": symbol,
+            "transaction_type": self.strat_var_trans_type,
+            "quantity": quantity,
+            "price": 0,  # Market order
+            "timestamp": datetime.now().isoformat(),
+        }
+        
+        # Add to order tracking system
+        # self.order_tracker.add_order(order_details)
+        
+        # Log order placement for strategy tracking
+        logger.info(f"Survivor order tracked: {order_id} - {self.strat_var_trans_type} {symbol} × {quantity}")
+        
 
     def _log_stable_market(self, current_val):
         """
@@ -919,7 +564,7 @@ class SurvivorStrategy:
 
         """
         logger.info(
-            f"{self.strat_var_symbol_initials} Nifty. "
+            f"{self.strat_var_symbol_initials} Nifty under control. "
             f"PE = {self.nifty_pe_last_value}, "
             f"CE = {self.nifty_ce_last_value}, "
             f"Current = {current_val}, "
@@ -1409,7 +1054,7 @@ PARAMETER GROUPS:
     logger.info(f"  Gap Triggers - PE: {config['pe_gap']}, CE: {config['ce_gap']}")
     logger.info(f"  Strike Selection - PE: -{config['pe_symbol_gap']}, CE: +{config['ce_symbol_gap']}")
     logger.info(f"  Base Quantities - PE: {config['pe_quantity']}, CE: {config['ce_quantity']}")
-    logger.info(f"  Risk Limits - Min Premium: ₹{config['min_price_to_sell']}, Max Multiplier: {config['sell_multiplier_threshold']}")
+    logger.info(f"  Risk Limits - Min Premium: ₹{config['min_price_to_sell']}, Max Multiplier: {config['sell_multiplier_threshold']}x")
 
     # ==========================================================================
     # SECTION 4: TRADING INFRASTRUCTURE SETUP

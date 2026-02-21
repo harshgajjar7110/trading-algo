@@ -2,7 +2,7 @@ import json
 import logging
 import os
 from datetime import datetime
-from logger import logger
+from logger import strategy_logger as logger
 
 
 class OrderTracker:

@@ -110,6 +110,62 @@ export interface ConfigValidationResponse {
 }
 
 // =============================================================================
+// Strategy Selector Types (V2)
+// =============================================================================
+
+export interface StrategyInfo {
+  id: string;
+  name: string;
+  description: string;
+  risk_level: 'low' | 'medium' | 'medium-high' | 'high';
+  recommended_capital: string;
+  tags: string[];
+  key_params: string[];
+}
+
+export interface StrategyDetails {
+  id: string;
+  name: string;
+  description: string;
+  version: string;
+  risk_level: string;
+  recommended_capital: string;
+  tags: string[];
+  default_params: Record<string, number | string>;
+  current_config: StrategyConfig;
+  config_path: string;
+}
+
+export interface StrategyConfigDifference {
+  param: string;
+  default: number | string;
+  current: number | string;
+}
+
+export interface StrategyPreview {
+  strategy_id: string;
+  strategy_name: string;
+  config: StrategyConfig;
+  is_valid: boolean;
+  validation_errors: string[];
+  differences_from_default: StrategyConfigDifference[];
+  risk_level: string;
+  recommended_capital: string;
+}
+
+export interface CurrentStrategy {
+  running: boolean;
+  id?: string;
+  strategy_id?: string;
+  name?: string;
+  status?: string;
+  started_at?: string;
+  pid?: number;
+  config_summary?: Record<string, number | string>;
+  message?: string;
+}
+
+// =============================================================================
 // Position Types
 // =============================================================================
 
@@ -129,6 +185,7 @@ export interface PositionsResponse {
   positions: Position[];
   total_pnl: number;
   total_pnl_percent: number;
+  error?: string;  // Error message if positions couldn't be fetched
 }
 
 // =============================================================================
@@ -290,4 +347,97 @@ export interface PortfolioPayoff {
   total_current_pnl: number;
   price_range_start: number;
   price_range_end: number;
+}
+
+// =============================================================================
+// Greeks Types
+// =============================================================================
+
+export interface PositionGreeks {
+  symbol: string;
+  option_type: string;
+  strike: number;
+  quantity: number;
+  entry_price: number;
+  delta: number;
+  gamma: number;
+  theta: number;
+  vega: number;
+  rho: number;
+  expiry_date?: string;
+  index_name?: string;
+}
+
+export interface PortfolioGreeks {
+  delta: number;
+  gamma: number;
+  theta: number;
+  vega: number;
+  rho: number;
+}
+
+export interface GreeksInterpretation {
+  delta: string;
+  gamma: string;
+  theta: string;
+  vega: string;
+  rho: string;
+}
+
+export interface GreeksResponse {
+  positions: PositionGreeks[];
+  portfolio: PortfolioGreeks;
+  interpretation: GreeksInterpretation;
+  underlying_price: number;
+  calculation_date: string;
+}
+
+export interface ScenarioResult {
+  price_change_pct: number;
+  price_change_points: number;
+  volatility_change: number;
+  days_forward: number;
+  estimated_pnl: number;
+  breakdown: {
+    delta_pnl: number;
+    gamma_pnl: number;
+    theta_pnl: number;
+    vega_pnl: number;
+  };
+}
+
+export interface ScenarioAnalysis {
+  current_greeks: PortfolioGreeks;
+  scenarios: ScenarioResult[];
+  underlying_price: number;
+  days_forward: number;
+}
+
+// =============================================================================
+// Authentication Types
+// =============================================================================
+
+export interface LoginUrlResponse {
+  success: boolean;
+  login_url: string | null;
+  broker: string;
+  message: string;
+}
+
+export interface AuthCallbackResponse {
+  success: boolean;
+  message: string;
+  access_token: string | null;
+}
+
+export interface AuthStatusResponse {
+  authenticated: boolean;
+  broker: string;
+  message: string;
+}
+
+export interface TokenVerifyResponse {
+  valid: boolean;
+  message: string;
+  profile?: Record<string, unknown>;
 }

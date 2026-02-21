@@ -14,6 +14,15 @@ import {
   Quote,
   NiftyData,
   Funds,
+  GreeksResponse,
+  ScenarioAnalysis,
+  LoginUrlResponse,
+  AuthCallbackResponse,
+  AuthStatusResponse,
+  StrategyInfo,
+  StrategyDetails,
+  StrategyPreview,
+  CurrentStrategy,
 } from '@/types';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
@@ -27,6 +36,8 @@ async function fetchAPI<T>(
 ): Promise<T> {
   const url = `${API_BASE}${endpoint}`;
   
+  console.log(`[API] ${options.method || 'GET'} ${url}`);
+  
   const response = await fetch(url, {
     ...options,
     headers: {
@@ -35,8 +46,10 @@ async function fetchAPI<T>(
     },
   });
 
+  console.log(`[API] Response: ${response.status} ${response.statusText}`);
+
   if (!response.ok) {
-    const error = await response.json().catch(() => ({ message: 'Unknown error' }));
+    const error = await response.json().catch(() => ({ message: `HTTP ${response.status}: ${response.statusText}` }));
     throw new Error(error.message || `HTTP error! status: ${response.status}`);
   }
 
@@ -161,9 +174,132 @@ export const marketAPI = {
 };
 
 // =============================================================================
+// Strategy Selector API (V2)
+// =============================================================================
+
+export const strategySelectorAPI = {
+  /**
+   * Get available strategies
+   */
+  getAvailableStrategies: () =>
+    fetchAPI<{ strategies: StrategyInfo[]; current: CurrentStrategy | null }>('/api/strategy/available'),
+
+  /**
+   * Get strategy details
+   */
+  getStrategyDetails: (strategyId: string) =>
+    fetchAPI<StrategyDetails>(`/api/strategy/${encodeURIComponent(strategyId)}/details`),
+
+  /**
+   * Preview strategy configuration before starting
+   */
+  previewConfig: (strategyId: string, configOverride?: Partial<StrategyConfig>) =>
+    fetchAPI<StrategyPreview>('/api/strategy/preview-config', {
+      method: 'POST',
+      body: JSON.stringify({ strategy_id: strategyId, config_override: configOverride }),
+    }),
+
+  /**
+   * Start strategy (with optional confirmation)
+   */
+  start: (strategyId: string, configOverride?: Partial<StrategyConfig>, confirmed?: boolean) =>
+    fetchAPI<StrategyStartResponse & { requires_confirmation?: boolean; preview?: StrategyPreview }>('/api/strategy/start', {
+      method: 'POST',
+      body: JSON.stringify({ strategy_id: strategyId, config_override: configOverride, confirmed }),
+    }),
+
+  /**
+   * Stop current strategy
+   */
+  stop: () =>
+    fetchAPI<StrategyStopResponse>('/api/strategy/stop', { method: 'POST' }),
+
+  /**
+   * Restart strategy
+   */
+  restart: (strategyId?: string, configOverride?: Partial<StrategyConfig>, confirmed?: boolean) =>
+    fetchAPI<StrategyStartResponse & { requires_confirmation?: boolean; preview?: StrategyPreview }>('/api/strategy/restart', {
+      method: 'POST',
+      body: JSON.stringify({ strategy_id: strategyId, config_override: configOverride, confirmed }),
+    }),
+
+  /**
+   * Get current running strategy
+   */
+  getCurrentStrategy: () =>
+    fetchAPI<CurrentStrategy>('/api/strategy/current'),
+
+  /**
+   * Compare all strategies
+   */
+  compareStrategies: () =>
+    fetchAPI<StrategyInfo[]>('/api/strategy/compare'),
+
+  /**
+   * Get full strategy status (state + current strategy)
+   */
+  getStatus: () =>
+    fetchAPI<{ state: StrategyState; current_strategy: CurrentStrategy; available_strategies: Record<string, string> }>('/api/strategy/status'),
+};
+
+// =============================================================================
+// Greeks API
+// =============================================================================
+
+export const greeksAPI = {
+  /**
+   * Get portfolio Greeks (Delta, Gamma, Theta, Vega, Rho)
+   */
+  getPortfolioGreeks: (params?: { underlying_price?: number; risk_free_rate?: number }) =>
+    fetchAPI<GreeksResponse>(`/api/greeks/portfolio?${new URLSearchParams(params as Record<string, string>).toString()}`),
+
+  /**
+   * Get scenario analysis for portfolio Greeks
+   */
+  getScenarioAnalysis: (params?: { days_forward?: number; risk_free_rate?: number }) =>
+    fetchAPI<ScenarioAnalysis>(`/api/greeks/scenario?${new URLSearchParams(params as Record<string, string>).toString()}`),
+
+  /**
+   * Get Greeks for a specific position
+   */
+  getPositionGreeks: (symbol: string, params?: { underlying_price?: number }) =>
+    fetchAPI<GreeksResponse>(`/api/greeks/position/${encodeURIComponent(symbol)}?${new URLSearchParams(params as Record<string, string>).toString()}`),
+};
+
+// =============================================================================
 // Health Check
 // =============================================================================
 
 export const healthAPI = {
   check: () => fetchAPI<{ status: string; version: string }>('/health'),
+};
+
+// =============================================================================
+// Authentication API
+// =============================================================================
+
+export const authAPI = {
+  /**
+   * Get current authentication status
+   */
+  getStatus: () => fetchAPI<AuthStatusResponse>('/api/auth/status'),
+
+  /**
+   * Get login URL for broker authentication
+   */
+  getLoginUrl: () => fetchAPI<LoginUrlResponse>('/api/auth/login-url'),
+
+  /**
+   * Submit request token after broker login
+   */
+  submitToken: (request_token: string) =>
+    fetchAPI<AuthCallbackResponse>('/api/auth/callback', {
+      method: 'POST',
+      body: JSON.stringify({ request_token }),
+    }),
+
+  /**
+   * Verify that the current token is valid
+   */
+  verifyToken: () => fetchAPI<TokenVerifyResponse>('/api/auth/verify'),
 };

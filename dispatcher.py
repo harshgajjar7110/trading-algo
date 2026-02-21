@@ -1,4 +1,4 @@
-from logger import logger
+from logger import strategy_logger as logger
 
 class DataDispatcher:
     """

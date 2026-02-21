@@ -184,36 +184,48 @@ class ZerodhaDriver(BrokerDriver):
                 self._kite = None
 
         # Manual login: use API key + secret to get login URL, then exchange request token for access token
+        # Skip interactive login if running in non-interactive mode (web server, etc.)
         if self._kite is None:
-            try:  # pragma: no cover - interactive
-                from kiteconnect import KiteConnect  # type: ignore
-                from ...auth.manual import manual_exchange_request_token
+            # Check if running in non-interactive mode
+            import sys
+            is_non_interactive = not sys.stdin.isatty() or os.getenv("BROKER_NON_INTERACTIVE") == "true"
+            
+            if is_non_interactive:
+                # In non-interactive mode, don't block waiting for input
+                # The web UI should handle authentication via /api/auth endpoints
+                print("[ZerodhaDriver] Running in non-interactive mode. Use the web UI to authenticate:")
+                print("[ZerodhaDriver] 1. Open http://localhost:3000/auth (or your frontend URL)")
+                print("[ZerodhaDriver] 2. Follow the authentication flow")
+            else:
+                try:  # pragma: no cover - interactive
+                    from kiteconnect import KiteConnect  # type: ignore
+                    from ...auth.manual import manual_exchange_request_token
 
-                api_key2 = api_key or os.getenv("KITE_API_KEY") or os.getenv("ZERODHA_API_KEY")
-                api_secret = os.getenv("BROKER_API_SECRET") or os.getenv("KITE_API_SECRET") or os.getenv("ZERODHA_API_SECRET")
-                if api_key2 and api_secret:
-                    kite2 = KiteConnect(api_key=api_key2)
-                    url = kite2.login_url()
-                    print(f"\n" + "=" * 60)
-                    print("ZERODHA MANUAL LOGIN")
-                    print("=" * 60)
-                    print(f"\n1. Open this URL in your browser:\n{url}\n")
-                    print("2. Login with your Zerodha credentials")
-                    print("3. After login, you will be redirected to a page with 'request_token'")
-                    print("4. Copy the request_token value from the URL and paste below\n")
-                    request_token = manual_exchange_request_token(url)
-                    sess = kite2.generate_session(request_token, api_secret)
-                    token = sess.get("access_token")
-                    if token:
-                        kite2.set_access_token(token)
-                        self._kite = kite2
-                        print("[ZerodhaDriver] Authentication successful!")
-                        # Save access token to .env for future use
-                        _save_access_token_to_env(token)
-            except Exception as e:
-                # Keep unauthenticated if manual flow fails
-                print(f"[ZerodhaDriver] Manual login failed: {e}")
-                pass
+                    api_key2 = api_key or os.getenv("KITE_API_KEY") or os.getenv("ZERODHA_API_KEY")
+                    api_secret = os.getenv("BROKER_API_SECRET") or os.getenv("KITE_API_SECRET") or os.getenv("ZERODHA_API_SECRET")
+                    if api_key2 and api_secret:
+                        kite2 = KiteConnect(api_key=api_key2)
+                        url = kite2.login_url()
+                        print(f"\n" + "=" * 60)
+                        print("ZERODHA MANUAL LOGIN")
+                        print("=" * 60)
+                        print(f"\n1. Open this URL in your browser:\n{url}\n")
+                        print("2. Login with your Zerodha credentials")
+                        print("3. After login, you will be redirected to a page with 'request_token'")
+                        print("4. Copy the request_token value from the URL and paste below\n")
+                        request_token = manual_exchange_request_token(url)
+                        sess = kite2.generate_session(request_token, api_secret)
+                        token = sess.get("access_token")
+                        if token:
+                            kite2.set_access_token(token)
+                            self._kite = kite2
+                            print("[ZerodhaDriver] Authentication successful!")
+                            # Save access token to .env for future use
+                            _save_access_token_to_env(token)
+                except Exception as e:
+                    # Keep unauthenticated if manual flow fails
+                    print(f"[ZerodhaDriver] Manual login failed: {e}")
+                    pass
 
     def _authenticate_via_totp(self) -> Optional[Any]:
         """Programmatic TOTP login using Zerodha web endpoints to obtain access token.

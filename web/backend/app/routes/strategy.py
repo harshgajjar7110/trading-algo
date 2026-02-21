@@ -47,8 +47,36 @@ async def start_strategy(request: StrategyStartRequest = None):
             status=StrategyStatus.RUNNING
         )
     
+    # Pre-flight check: Validate broker authentication before starting
+    try:
+        from app.services.broker_service import broker_service
+        broker = broker_service._ensure_broker()
+        funds = broker.get_funds()
+        
+        # Check for auth errors
+        if funds.raw and isinstance(funds.raw, dict):
+            if funds.raw.get("error") == "unauthenticated" or "access_token" in str(funds.raw.get("error", "")).lower():
+                return StrategyStartResponse(
+                    success=False,
+                    message="Authentication failed. Please go to the Auth page and login with your broker.",
+                    status=StrategyStatus.STOPPED
+                )
+    except Exception as e:
+        error_str = str(e)
+        if "api_key" in error_str.lower() or "access_token" in error_str.lower() or "unauthenticated" in error_str.lower():
+            return StrategyStartResponse(
+                success=False,
+                message="Authentication failed. Please go to the Auth page and login with your broker.",
+                status=StrategyStatus.STOPPED
+            )
+        # Other errors might be temporary, log but continue
+        print(f"[Strategy] Pre-flight broker check warning: {e}")
+    
     config_override = request.config_override if request else None
     success = strategy_manager.start(config_override)
+    
+    # Get updated state (might contain error message)
+    updated_state = strategy_manager.get_state()
     
     if success:
         return StrategyStartResponse(
@@ -57,10 +85,12 @@ async def start_strategy(request: StrategyStartRequest = None):
             status=StrategyStatus.RUNNING
         )
     else:
+        # Include error message if available
+        error_msg = updated_state.error_message or "Failed to start strategy"
         return StrategyStartResponse(
             success=False,
-            message="Failed to start strategy",
-            status=strategy_manager.get_state().status
+            message=error_msg,
+            status=updated_state.status
         )
 
 

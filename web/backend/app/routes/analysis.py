@@ -21,49 +21,86 @@ def parse_option_symbol(symbol: str) -> Optional[dict]:
     """
     Parse an option symbol to extract strike and type.
     
+    Supports multiple formats:
+    - Monthly: NIFTY24FEB24000CE, BANKNIFTY24FEB45000PE
+    - Weekly: NIFTY24FEB1324000CE (Feb 13 weekly expiry)
+    - Different indices: BANKNIFTY, FINNIFTY, MIDCPNIFTY, SENSEX
+    
     Examples:
     - NIFTY24FEB24000PE -> {strike: 24000, type: PE, expiry: 24FEB}
     - NIFTY24FEB24000CE -> {strike: 24000, type: CE, expiry: 24FEB}
+    - NIFTY24FEB1324000CE -> {strike: 24000, type: CE, weekly expiry Feb 13}
     """
-    # Pattern for NIFTY options: NIFTY + DDMMM + STRIKE + CE/PE
-    pattern = r'NIFTY(\d{2}[A-Z]{3})(\d+)(CE|PE)'
-    match = re.match(pattern, symbol.upper())
+    if not symbol:
+        return None
+        
+    symbol = symbol.upper().strip()
     
-    if match:
-        expiry = match.group(1)
-        strike = int(match.group(2))
-        option_type = match.group(3)
-        return {
-            'strike': strike,
-            'option_type': OptionType.CALL if option_type == 'CE' else OptionType.PUT,
-            'expiry': expiry
-        }
-    
-    # Try alternative pattern: might have different format
-    # Look for CE or PE at the end
+    # Extract CE/PE first
     if symbol.endswith('CE'):
         option_type = OptionType.CALL
-        # Try to extract strike (usually 5 digits before CE)
-        rest = symbol[:-2]
-        strike_match = re.search(r'(\d{4,5})$', rest)
-        if strike_match:
-            return {
-                'strike': int(strike_match.group(1)),
-                'option_type': option_type,
-                'expiry': None
-            }
+        base = symbol[:-2]
     elif symbol.endswith('PE'):
         option_type = OptionType.PUT
-        rest = symbol[:-2]
-        strike_match = re.search(r'(\d{4,5})$', rest)
-        if strike_match:
-            return {
-                'strike': int(strike_match.group(1)),
-                'option_type': option_type,
-                'expiry': None
-            }
+        base = symbol[:-2]
+    else:
+        return None
     
-    return None
+    # Extract strike (last 4-5 digits)
+    strike_match = re.search(r'(\d{4,5})$', base)
+    if not strike_match:
+        return None
+    
+    strike = int(strike_match.group(1))
+    prefix = base[:strike_match.start()]
+    
+    # Try weekly format: INDEX + YY + MMM + DD
+    weekly_pattern = r'^([A-Z]+)(\d{2})([A-Z]{2,3})(\d{2})$'
+    weekly_match = re.match(weekly_pattern, prefix)
+    
+    if weekly_match:
+        return {
+            'strike': strike,
+            'option_type': option_type,
+            'expiry': f"{weekly_match.group(2)}{weekly_match.group(3)}-{weekly_match.group(4)}",
+            'index_name': weekly_match.group(1),
+            'expiry_type': 'WEEKLY'
+        }
+    
+    # Try monthly format: INDEX + YY + MMM
+    monthly_pattern = r'^([A-Z]+)(\d{2})([A-Z]{2,3})$'
+    monthly_match = re.match(monthly_pattern, prefix)
+    
+    if monthly_match:
+        return {
+            'strike': strike,
+            'option_type': option_type,
+            'expiry': f"{monthly_match.group(2)}{monthly_match.group(3)}",
+            'index_name': monthly_match.group(1),
+            'expiry_type': 'MONTHLY'
+        }
+    
+    # Fallback: try to infer index name
+    if 'BANKNIFTY' in prefix:
+        index_name = 'BANKNIFTY'
+    elif 'FINNIFTY' in prefix:
+        index_name = 'FINNIFTY'
+    elif 'MIDCPNIFTY' in prefix:
+        index_name = 'MIDCPNIFTY'
+    elif 'SENSEX' in prefix:
+        index_name = 'SENSEX'
+    elif 'NIFTY' in prefix:
+        index_name = 'NIFTY'
+    else:
+        index_name = 'UNKNOWN'
+    
+    return {
+        'strike': strike,
+        'option_type': option_type,
+        'expiry': None,
+        'index_name': index_name,
+        'expiry_type': 'UNKNOWN'
+    }
 
 
 def calculate_option_payoff(

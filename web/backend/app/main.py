@@ -13,7 +13,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
-from app.routes import strategy, config, positions, market, analysis
+from app.routes import strategy, config, positions, market, analysis, greeks, auth, strategy_selector
 from app.websocket.manager import (
     connection_manager,
     create_price_update,
@@ -95,10 +95,13 @@ app.add_middleware(
 # =============================================================================
 
 app.include_router(strategy.router, prefix="/api")
+app.include_router(strategy_selector.router, prefix="/api")  # New strategy selector API
 app.include_router(config.router, prefix="/api")
 app.include_router(positions.router, prefix="/api")
 app.include_router(market.router, prefix="/api")
 app.include_router(analysis.router)
+app.include_router(greeks.router)
+app.include_router(auth.router, prefix="/api")
 
 
 # =============================================================================

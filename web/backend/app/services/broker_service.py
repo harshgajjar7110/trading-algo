@@ -56,14 +56,36 @@ class BrokerService:
             self._broker = BrokerGateway.from_name(os.getenv("BROKER_NAME"))
         return self._broker
     
+    def reinitialize(self) -> None:
+        """Re-initialize the broker with current credentials."""
+        # Clear the cached broker instance
+        BrokerService._broker = None
+        self._broker = None
+        print("[BrokerService] Broker reinitialized - will create new instance on next use")
+    
     def get_positions(self) -> PositionsResponse:
         """Get all current positions."""
-        broker = self._ensure_broker()
-        
         try:
+            broker = self._ensure_broker()
             positions_data = broker.get_positions()
             positions = []
             total_pnl = 0.0
+            
+            # Check if broker is authenticated (driver returns empty list if not)
+            # We can detect this by checking if we got an empty list AND funds also fail
+            if not positions_data:
+                try:
+                    funds = broker.get_funds()
+                    if funds.raw and (funds.raw.get("error") or funds.net == 0):
+                        # Likely authentication error
+                        return PositionsResponse(
+                            positions=[],
+                            total_pnl=0.0,
+                            total_pnl_percent=0.0,
+                            error="Not authenticated with broker. Please go to Auth page and login."
+                        )
+                except Exception:
+                    pass
             
             for pos in positions_data:
                 # Get PnL from broker (already calculated correctly)
@@ -101,11 +123,16 @@ class BrokerService:
             )
             
         except Exception as e:
-            print(f"Error getting positions: {e}")
+            error_msg = str(e)
+            print(f"Error getting positions: {error_msg}")
+            # Check for common auth errors
+            if "api_key" in error_msg.lower() or "access_token" in error_msg.lower() or "unauthenticated" in error_msg.lower():
+                error_msg = "Authentication failed. Please go to Auth page and re-authenticate."
             return PositionsResponse(
                 positions=[],
                 total_pnl=0.0,
-                total_pnl_percent=0.0
+                total_pnl_percent=0.0,
+                error=error_msg
             )
     
     def get_orders(self) -> OrdersResponse:

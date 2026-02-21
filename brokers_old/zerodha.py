@@ -11,7 +11,7 @@ from kiteconnect import KiteConnect, KiteTicker
 import pandas as pd
 from threading import Thread
 
-from logger import logger
+from logger import strategy_logger as logger
 
 
 load_dotenv()

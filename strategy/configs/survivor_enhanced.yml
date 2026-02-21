@@ -1,0 +1,188 @@
+# =============================================================================
+# Enhanced Survivor Strategy Configuration
+# =============================================================================
+# This configuration extends the base Survivor Strategy with advanced
+# risk management, technical filters, and dynamic adjustments.
+# =============================================================================
+
+default:
+  # ============================================================================
+  # CORE PARAMETERS (Inherited from base strategy)
+  # ============================================================================
+  
+  # Option series identifier (e.g., NIFTY26FEB)
+  symbol_initials: "NIFTY26FEB"
+  
+  # Underlying index for price tracking
+  index_symbol: "NSE:NIFTY 50"
+  
+  # Exchange for trading
+  exchange: "NFO"
+  
+  # Order settings
+  order_type: "MARKET"
+  product_type: "NRML"
+  trans_type: "SELL"
+  tag: "SurvivorEnhanced"
+  
+  # ============================================================================
+  # GAP PARAMETERS (Base)
+  # ============================================================================
+  
+  # Price movement thresholds to trigger trades (in points)
+  pe_gap: 40              # NIFTY must rise this much to trigger PE sell
+  ce_gap: 40              # NIFTY must fall this much to trigger CE sell
+  
+  # Reset thresholds (favorable movement to reset reference)
+  pe_reset_gap: 30        # Reset PE reference if price drops this much
+  ce_reset_gap: 30        # Reset CE reference if price rises this much
+  
+  # Strike selection gaps (distance from spot)
+  pe_symbol_gap: 800      # Sell PE this many points below spot
+  ce_symbol_gap: 800      # Sell CE this many points above spot
+  
+  # ============================================================================
+  # POSITION SIZING (Base)
+  # ============================================================================
+  
+  # Base quantities for each trade
+  pe_quantity: 65         # Base PE quantity
+  ce_quantity: 65         # Base CE quantity
+  
+  # Starting reference points (0 = use current market price)
+  pe_start_point: 0
+  ce_start_point: 0
+  
+  # Risk management
+  min_price_to_sell: 15.0              # Minimum option premium
+  sell_multiplier_threshold: 2        # Max position multiplier
+
+  # ============================================================================
+  # ENHANCED: TECHNICAL INDICATOR FILTERS
+  # ============================================================================
+  
+  # Entry filter type: NONE, RSI, EMA, ADX, ALL
+  # - NONE: No filters (base strategy behavior)
+  # - RSI: Use RSI overbought/oversold filter
+  # - EMA: Use trend filter (trade with trend)
+  # - ADX: Use ADX strength filter
+  # - ALL: Use all available filters
+  entry_filter_type: "ADX"
+  
+  # RSI Settings
+  rsi_period: 14          # RSI calculation period
+  rsi_min: 30             # Don't sell CE if RSI < 30 (oversold)
+  rsi_max: 70             # Don't sell PE if RSI > 70 (overbought)
+  
+  # EMA Settings
+  ema_period: 20          # EMA period for trend detection
+  
+  # ADX Settings
+  adx_period: 14          # ADX calculation period
+  adx_threshold: 25       # Minimum ADX to trade (trend strength)
+  
+  # ATR Settings
+  atr_period: 14          # ATR period for volatility measurement
+  atr_history_days: 5     # Days of history to load for indicators
+
+  # ============================================================================
+  # ENHANCED: POSITION LIMITS
+  # ============================================================================
+  
+  # Maximum positions
+  max_positions_per_side: 3    # Max PE or CE positions separately
+  max_total_positions: 5       # Max combined positions
+  max_consecutive_losses: 2    # Pause trading after N consecutive losses
+
+  # ============================================================================
+  # ENHANCED: STOP-LOSS & RISK MANAGEMENT
+  # ============================================================================
+  
+  # Stop-loss settings
+  stop_loss_multiplier: 2.0    # Exit if premium doubles (200% of entry)
+  
+  # Trailing stop (optional)
+  trailing_stop_enabled: false
+  trailing_stop_distance: 0.5  # Exit if profit falls 50% from peak
+  
+  # Daily loss limit
+  max_daily_loss_percent: -3.0  # Stop trading at -3% daily loss
+  
+  # Time-based square off
+  square_off_time: "15:15"      # Close all positions at this time
+
+  # ============================================================================
+  # ENHANCED: DYNAMIC GAP ADJUSTMENT
+  # ============================================================================
+  
+  # Enable ATR-based dynamic gaps
+  enable_dynamic_gaps: true
+  
+  # ATR multipliers for gap calculation
+  # effective_gap = base_gap × (current_ATR / average_ATR)
+  atr_multiplier_pe: 2.0
+  atr_multiplier_ce: 2.0
+
+  # ============================================================================
+  # ENHANCED: VOLATILITY-BASED POSITION SIZING
+  # ============================================================================
+  
+  # Enable volatility sizing
+  volatility_sizing: true
+  
+  # Size adjustments by volatility regime
+  high_vol_size_reduction: 0.5   # Trade 50% size in high volatility
+  # Low volatility: size increased by 10% (hardcoded)
+
+
+# =============================================================================
+# PRESET CONFIGURATIONS
+# =============================================================================
+
+# Conservative - Lower risk, fewer trades
+conservative:
+  entry_filter_type: "ALL"
+  rsi_min: 35
+  rsi_max: 65
+  adx_threshold: 30
+  max_positions_per_side: 2
+  max_total_positions: 3
+  stop_loss_multiplier: 1.5
+  pe_gap: 50
+  ce_gap: 50
+  enable_dynamic_gaps: true
+  volatility_sizing: true
+
+# Aggressive - More trades, higher risk
+aggressive:
+  entry_filter_type: "EMA"
+  rsi_min: 20
+  rsi_max: 80
+  adx_threshold: 20
+  max_positions_per_side: 5
+  max_total_positions: 8
+  stop_loss_multiplier: 3.0
+  pe_gap: 25
+  ce_gap: 25
+  enable_dynamic_gaps: false
+  volatility_sizing: false
+
+# Trend Following - Only trade with strong trends
+trend_following:
+  entry_filter_type: "ALL"
+  rsi_period: 14
+  ema_period: 20
+  adx_period: 14
+  adx_threshold: 30
+  max_positions_per_side: 3
+  enable_dynamic_gaps: true
+  volatility_sizing: true
+
+# Mean Reversion - Trade against extremes (counter-trend)
+mean_reversion:
+  entry_filter_type: "RSI"
+  rsi_period: 14
+  rsi_min: 20
+  rsi_max: 80
+  # Note: Would need code modification to invert EMA logic
+  # For now, uses RSI only

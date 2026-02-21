@@ -3,7 +3,7 @@ import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import yaml
-from logger import logger
+from logger import strategy_logger as logger
 from brokers import BrokerGateway, OrderRequest, Exchange, OrderType, TransactionType, ProductType
 
 class SurvivorStrategy:
@@ -629,7 +629,7 @@ if __name__ == "__main__":
     from orders import OrderTracker
     from strategy.survivor import SurvivorStrategy
     # from brokers.zerodha import ZerodhaBroker
-    from logger import logger
+    from logger import strategy_logger as logger
     from queue import Queue
     import random
     import traceback

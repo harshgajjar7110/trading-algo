@@ -9,11 +9,14 @@ import {
   PositionsResponse, 
   Funds,
   Position,
-  WSMessage
+  WSMessage,
+  AuthStatusResponse
 } from '@/types';
-import { strategyAPI, marketAPI, tradingAPI } from '@/lib/api';
+import { strategyAPI, marketAPI, tradingAPI, authAPI } from '@/lib/api';
 import { useWebSocket } from '@/hooks/useWebSocket';
 import PayoffChart from '@/components/PayoffChart';
+import GreeksDisplay from '@/components/GreeksDisplay';
+import StrategySelector from '@/components/StrategySelector';
 import { 
   formatCurrency, 
   formatNumber, 
@@ -36,6 +39,7 @@ export default function Dashboard() {
   const [error, setError] = useState<string | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
+  const [authStatus, setAuthStatus] = useState<AuthStatusResponse | null>(null);
   
   // Sorting state
   const [sortField, setSortField] = useState<SortField>('pnl');
@@ -44,16 +48,18 @@ export default function Dashboard() {
   // Fetch initial data
   const fetchData = useCallback(async () => {
     try {
-      const [state, nifty, pos, fundsData] = await Promise.all([
+      const [state, nifty, pos, fundsData, auth] = await Promise.all([
         strategyAPI.getStatus(),
         marketAPI.getNiftyData(),
         tradingAPI.getPositions(),
         marketAPI.getFunds(),
+        authAPI.getStatus(),
       ]);
       setStrategyState(state);
       setNiftyData(nifty);
       setPositions(pos);
       setFunds(fundsData);
+      setAuthStatus(auth);
       setLastRefresh(new Date());
       setError(null);
     } catch (err) {
@@ -234,6 +240,16 @@ export default function Dashboard() {
                 </span>
               </div>
               
+              {/* Auth Status */}
+              {authStatus && (
+                <div className="flex items-center space-x-2">
+                  <div className={`w-2 h-2 rounded-full ${authStatus.authenticated ? 'bg-green-500' : 'bg-yellow-500'}`}></div>
+                  <Link href="/auth" className={`text-sm ${authStatus.authenticated ? 'text-green-600 hover:text-green-700' : 'text-yellow-600 hover:text-yellow-700'}`}>
+                    {authStatus.authenticated ? 'Authenticated' : 'Not Authenticated'}
+                  </Link>
+                </div>
+              )}
+              
               {/* Manual Refresh */}
               <button 
                 onClick={fetchData}
@@ -243,6 +259,9 @@ export default function Dashboard() {
               </button>
               
               {/* Navigation */}
+              <Link href="/auth" className="btn-secondary">
+                🔑 Auth
+              </Link>
               <Link href="/config" className="btn-secondary">
                 Configuration
               </Link>
@@ -269,6 +288,25 @@ export default function Dashboard() {
         </div>
       )}
 
+      {/* Auth Warning */}
+      {authStatus && !authStatus.authenticated && (
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-4">
+          <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-yellow-800 font-medium">⚠️ Not Authenticated with Broker</p>
+                <p className="text-yellow-700 text-sm mt-1">
+                  You need to authenticate with your broker to fetch positions and place trades.
+                </p>
+              </div>
+              <Link href="/auth" className="btn-primary bg-yellow-600 hover:bg-yellow-700">
+                Authenticate Now
+              </Link>
+            </div>
+          </div>
+        </div>
+      )}
+
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {/* Top Row - Key Metrics */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
@@ -281,6 +319,15 @@ export default function Dashboard() {
               </span>
             </div>
             <div className="space-y-2">
+              {/* Show which strategy is running */}
+              {strategyState?.current_strategy && (
+                <div className="flex justify-between text-sm">
+                  <span className="text-gray-500">Running</span>
+                  <span className="font-medium text-primary-600 truncate max-w-[150px]" title={strategyState.current_strategy}>
+                    {strategyState.current_strategy}
+                  </span>
+                </div>
+              )}
               <div className="flex justify-between text-sm">
                 <span className="text-gray-500">Uptime</span>
                 <span className="font-medium">{formatUptime(strategyState?.uptime_seconds)}</span>
@@ -458,11 +505,33 @@ export default function Dashboard() {
               </table>
             </div>
           ) : (
-            <div className="px-6 py-12 text-center text-gray-500">
-              No active positions
+            <div className="px-6 py-12 text-center">
+              {positions?.error ? (
+                <div className="text-red-600">
+                  <p className="font-medium mb-2">⚠️ Error loading positions</p>
+                  <p className="text-sm">{positions.error}</p>
+                  <Link href="/auth" className="text-primary-600 hover:text-primary-700 text-sm mt-3 inline-block">
+                    Go to Auth page →
+                  </Link>
+                </div>
+              ) : (
+                <span className="text-gray-500">No active positions</span>
+              )}
             </div>
           )}
         </div>
+
+        {/* Strategy Selector Section */}
+        <div className="mt-6">
+          <StrategySelector onStrategyChange={fetchData} />
+        </div>
+
+        {/* Greeks Section */}
+        {positions && positions.positions.length > 0 && (
+          <div className="mt-6">
+            <GreeksDisplay refreshInterval={30000} />
+          </div>
+        )}
 
         {/* Payoff Analysis Section */}
         {positions && positions.positions.length > 0 && (

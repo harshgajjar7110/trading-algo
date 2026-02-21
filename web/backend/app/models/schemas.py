@@ -46,6 +46,9 @@ class StrategyState(BaseModel):
     last_update: Optional[datetime] = None
     error_message: Optional[str] = None
     uptime_seconds: Optional[float] = None
+    # Extended fields for strategy selection
+    current_strategy: Optional[str] = None  # "Strategy Name (strategy_id)"
+    instance_id: Optional[str] = None  # Unique instance ID
 
 
 class StrategyStartRequest(BaseModel):
@@ -129,6 +132,7 @@ class PositionsResponse(BaseModel):
     positions: List[Position]
     total_pnl: float
     total_pnl_percent: float
+    error: Optional[str] = None  # Error message if positions couldn't be fetched
 
 
 # =============================================================================
@@ -309,3 +313,68 @@ class PortfolioPayoff(BaseModel):
     total_current_pnl: float
     price_range_start: float
     price_range_end: float
+
+
+# =============================================================================
+# Greeks Models
+# =============================================================================
+
+class PositionGreeks(BaseModel):
+    """Greeks for a single option position."""
+    symbol: str
+    option_type: str  # CE or PE
+    strike: float
+    quantity: int
+    entry_price: float
+    delta: float
+    gamma: float
+    theta: float
+    vega: float
+    rho: float
+    expiry_date: Optional[str] = None
+    index_name: Optional[str] = None
+
+
+class PortfolioGreeks(BaseModel):
+    """Aggregate Greeks for the entire portfolio."""
+    delta: float
+    gamma: float
+    theta: float
+    vega: float
+    rho: float
+
+
+class GreeksInterpretation(BaseModel):
+    """Human-readable interpretations of portfolio Greeks."""
+    delta: str
+    gamma: str
+    theta: str
+    vega: str
+    rho: str
+
+
+class GreeksResponse(BaseModel):
+    """Response containing portfolio Greeks calculation."""
+    positions: List[PositionGreeks]
+    portfolio: PortfolioGreeks
+    interpretation: GreeksInterpretation
+    underlying_price: float
+    calculation_date: str
+
+
+class ScenarioResult(BaseModel):
+    """Single scenario result for Greeks analysis."""
+    price_change_pct: float
+    price_change_points: float
+    volatility_change: float
+    days_forward: int
+    estimated_pnl: float
+    breakdown: Dict[str, float]
+
+
+class ScenarioAnalysis(BaseModel):
+    """Scenario analysis results for portfolio Greeks."""
+    current_greeks: PortfolioGreeks
+    scenarios: List[ScenarioResult]
+    underlying_price: float
+    days_forward: int

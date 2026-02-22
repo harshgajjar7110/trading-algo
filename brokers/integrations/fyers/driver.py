@@ -53,6 +53,8 @@ class FyersDriver(BrokerDriver):
             supports_cover_order=False,
             supports_multileg_order=True,
             supports_basket_orders=True,
+            supports_exit_positions=True,
+            supports_convert_position=False,
         )
         # Attempt to wire SDK if access token is provided
         self._client_id: Optional[str] = None
@@ -899,8 +901,143 @@ class FyersDriver(BrokerDriver):
         except Exception as e:  # noqa: BLE001
             return {"s": "error", "message": str(e)}
 
-    def exit_positions(self, *args: Any, **kwargs: Any) -> Any:
-        raise UnsupportedOperationError("FyersDriver.exit_positions not implemented yet in brokers2")
+    def exit_positions(self, symbol: Optional[str] = None, exchange: Optional[str] = None,
+                      product_type: Optional[ProductType] = None, cancel_pending_orders: bool = True) -> Dict[str, Any]:
+        """
+        Bulk exit all or filtered positions.
+        
+        Args:
+            symbol: Optional symbol to filter positions (exit only this symbol)
+            exchange: Optional exchange to filter positions
+            product_type: Optional product type to filter positions
+            cancel_pending_orders: Whether to cancel pending orders for the symbols being exited
+            
+        Returns:
+            Dict with 'success', 'failed', 'errors' lists and summary
+        """
+        if not self._fyers_model:
+            return {"error": "unauthenticated", "success": [], "failed": [], "errors": ["Not authenticated"]}
+        
+        results = {
+            "success": [],
+            "failed": [],
+            "errors": [],
+            "cancelled_orders": [],
+            "summary": {
+                "total_positions": 0,
+                "exited": 0,
+                "failed": 0
+            }
+        }
+        
+        try:
+            # Get current positions
+            positions = self.get_positions()
+            
+            # Filter positions if needed
+            filtered_positions = []
+            for pos in positions:
+                # Skip positions with zero quantity
+                if pos.quantity_total == 0:
+                    continue
+                    
+                # Apply filters
+                if symbol and pos.symbol != symbol:
+                    continue
+                if exchange and pos.exchange.value != exchange:
+                    continue
+                if product_type and pos.product_type != product_type:
+                    continue
+                    
+                filtered_positions.append(pos)
+            
+            results["summary"]["total_positions"] = len(filtered_positions)
+            
+            if not filtered_positions:
+                results["errors"].append("No matching positions found")
+                return results
+            
+            # Cancel pending orders for these symbols if requested
+            if cancel_pending_orders:
+                try:
+                    orders = self.get_orderbook()
+                    for order in orders:
+                        order_status = order.get("status", "").upper()
+                        if order_status in ["OPEN", "PENDING", "AMO"]:
+                            order_symbol = order.get("symbol", "").split(":")[-1] if ":" in order.get("symbol", "") else order.get("symbol", "")
+                            # Check if this order is for a position we're exiting
+                            for pos in filtered_positions:
+                                if pos.symbol == order_symbol:
+                                    try:
+                                        cancel_resp = self.cancel_order(str(order.get("id")))
+                                        if cancel_resp.status == "ok":
+                                            results["cancelled_orders"].append({
+                                                "order_id": order.get("id"),
+                                                "symbol": order_symbol,
+                                                "status": "cancelled"
+                                            })
+                                    except Exception as e:
+                                        results["errors"].append(f"Failed to cancel order {order.get('id')}: {str(e)}")
+                                    break
+                except Exception as e:
+                    results["errors"].append(f"Error cancelling pending orders: {str(e)}")
+            
+            # Place exit orders for each position
+            for pos in filtered_positions:
+                try:
+                    # Determine transaction type (opposite of position)
+                    # Positive quantity = long position -> SELL to exit
+                    # Negative quantity = short position -> BUY to exit
+                    if pos.quantity_total > 0:
+                        txn_type = TransactionType.SELL
+                        quantity = pos.quantity_total
+                    else:
+                        txn_type = TransactionType.BUY
+                        quantity = abs(pos.quantity_total)
+                    
+                    # Create exit order request
+                    exit_request = OrderRequest(
+                        symbol=pos.symbol,
+                        exchange=pos.exchange,
+                        quantity=quantity,
+                        order_type=OrderType.MARKET,
+                        transaction_type=txn_type,
+                        product_type=pos.product_type,
+                        tag="bulk_exit"
+                    )
+                    
+                    # Place the exit order
+                    resp = self.place_order(exit_request)
+                    
+                    if resp.status == "ok":
+                        results["success"].append({
+                            "symbol": pos.symbol,
+                            "exchange": pos.exchange.value,
+                            "quantity": quantity,
+                            "transaction_type": txn_type.value,
+                            "order_id": resp.order_id,
+                            "product_type": pos.product_type.value
+                        })
+                        results["summary"]["exited"] += 1
+                    else:
+                        results["failed"].append({
+                            "symbol": pos.symbol,
+                            "error": resp.message or "Unknown error"
+                        })
+                        results["summary"]["failed"] += 1
+                        
+                except Exception as e:
+                    results["failed"].append({
+                        "symbol": pos.symbol,
+                        "error": str(e)
+                    })
+                    results["summary"]["failed"] += 1
+            
+            return results
+            
+        except Exception as e:
+            results["errors"].append(f"Unexpected error in exit_positions: {str(e)}")
+            return results
 
     def convert_position(self, *args: Any, **kwargs: Any) -> Any:
         raise UnsupportedOperationError("FyersDriver.convert_position not implemented yet in brokers2")

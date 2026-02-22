@@ -162,6 +162,8 @@ class ZerodhaDriver(BrokerDriver):
             supports_cover_order=True,
             supports_multileg_order=False,
             supports_basket_orders=True,
+            supports_exit_positions=True,
+            supports_convert_position=True,
         )
         self._kite = None  # kiteconnect client if available
         self._kite_ws = None
@@ -799,11 +801,215 @@ class ZerodhaDriver(BrokerDriver):
         except Exception as e:  # noqa: BLE001
             return {"error": str(e)}
 
-    def exit_positions(self, *args: Any, **kwargs: Any) -> Any:
-        raise UnsupportedOperationError("ZerodhaDriver.exit_positions not implemented yet in brokers2")
+    def exit_positions(self, symbol: Optional[str] = None, exchange: Optional[str] = None, 
+                      product_type: Optional[ProductType] = None, cancel_pending_orders: bool = True) -> Dict[str, Any]:
+        """
+        Bulk exit all or filtered positions.
+        
+        Args:
+            symbol: Optional symbol to filter positions (exit only this symbol)
+            exchange: Optional exchange to filter positions
+            product_type: Optional product type to filter positions
+            cancel_pending_orders: Whether to cancel pending orders for the symbols being exited
+            
+        Returns:
+            Dict with 'success', 'failed', 'errors' lists and summary
+        """
+        if not self._kite:
+            return {"error": "unauthenticated", "success": [], "failed": [], "errors": ["Not authenticated"]}
+        
+        results = {
+            "success": [],
+            "failed": [],
+            "errors": [],
+            "cancelled_orders": [],
+            "summary": {
+                "total_positions": 0,
+                "exited": 0,
+                "failed": 0
+            }
+        }
+        
+        try:
+            # Get current positions
+            positions = self.get_positions()
+            
+            # Filter positions if needed
+            filtered_positions = []
+            for pos in positions:
+                # Skip positions with zero quantity
+                if pos.quantity_total == 0:
+                    continue
+                    
+                # Apply filters
+                if symbol and pos.symbol != symbol:
+                    continue
+                if exchange and pos.exchange.value != exchange:
+                    continue
+                if product_type and pos.product_type != product_type:
+                    continue
+                    
+                filtered_positions.append(pos)
+            
+            results["summary"]["total_positions"] = len(filtered_positions)
+            
+            if not filtered_positions:
+                results["errors"].append("No matching positions found")
+                return results
+            
+            # Cancel pending orders for these symbols if requested
+            if cancel_pending_orders:
+                try:
+                    orders = self.get_orderbook()
+                    for order in orders:
+                        order_status = order.get("status", "").upper()
+                        if order_status in ["OPEN", "PENDING", "AMO"]:
+                            order_symbol = order.get("tradingsymbol", "")
+                            # Check if this order is for a position we're exiting
+                            for pos in filtered_positions:
+                                if pos.symbol == order_symbol:
+                                    try:
+                                        cancel_resp = self.cancel_order(str(order.get("order_id")))
+                                        if cancel_resp.status == "ok":
+                                            results["cancelled_orders"].append({
+                                                "order_id": order.get("order_id"),
+                                                "symbol": order_symbol,
+                                                "status": "cancelled"
+                                            })
+                                    except Exception as e:
+                                        results["errors"].append(f"Failed to cancel order {order.get('order_id')}: {str(e)}")
+                                    break
+                except Exception as e:
+                    results["errors"].append(f"Error cancelling pending orders: {str(e)}")
+            
+            # Place exit orders for each position
+            for pos in filtered_positions:
+                try:
+                    # Determine transaction type (opposite of position)
+                    # Positive quantity = long position -> SELL to exit
+                    # Negative quantity = short position -> BUY to exit
+                    if pos.quantity_total > 0:
+                        txn_type = TransactionType.SELL
+                        quantity = pos.quantity_total
+                    else:
+                        txn_type = TransactionType.BUY
+                        quantity = abs(pos.quantity_total)
+                    
+                    # Create exit order request
+                    exit_request = OrderRequest(
+                        symbol=pos.symbol,
+                        exchange=pos.exchange,
+                        quantity=quantity,
+                        order_type=OrderType.MARKET,
+                        transaction_type=txn_type,
+                        product_type=pos.product_type,
+                        tag="bulk_exit"
+                    )
+                    
+                    # Place the exit order
+                    resp = self.place_order(exit_request)
+                    
+                    if resp.status == "ok":
+                        results["success"].append({
+                            "symbol": pos.symbol,
+                            "exchange": pos.exchange.value,
+                            "quantity": quantity,
+                            "transaction_type": txn_type.value,
+                            "order_id": resp.order_id,
+                            "product_type": pos.product_type.value
+                        })
+                        results["summary"]["exited"] += 1
+                    else:
+                        results["failed"].append({
+                            "symbol": pos.symbol,
+                            "error": resp.message or "Unknown error"
+                        })
+                        results["summary"]["failed"] += 1
+                        
+                except Exception as e:
+                    results["failed"].append({
+                        "symbol": pos.symbol,
+                        "error": str(e)
+                    })
+                    results["summary"]["failed"] += 1
+            
+            return results
+            
+        except Exception as e:
+            results["errors"].append(f"Unexpected error in exit_positions: {str(e)}")
+            return results
 
-    def convert_position(self, *args: Any, **kwargs: Any) -> Any:
-        raise UnsupportedOperationError("ZerodhaDriver.convert_position not implemented yet in brokers2")
+    def convert_position(self, exchange: str, symbol: str, transaction_type: TransactionType,
+                        position_type: str, quantity: int, old_product: ProductType, 
+                        new_product: ProductType) -> OrderResponse:
+        """
+        Convert position from one product type to another (e.g., MIS to NRML).
+        
+        Args:
+            exchange: Exchange code (e.g., "NSE", "NFO")
+            symbol: Trading symbol
+            transaction_type: BUY or SELL
+            position_type: "overnight" or "day"
+            quantity: Quantity to convert
+            old_product: Current product type
+            new_product: Target product type
+            
+        Returns:
+            OrderResponse with status and order_id
+        """
+        if not self._kite:
+            return OrderResponse(status="error", order_id=None, message="unauthenticated")
+        
+        try:
+            # Map product types to Zerodha format
+            old_product_str = "NRML" if old_product == ProductType.MARGIN else "MIS"
+            new_product_str = "NRML" if new_product == ProductType.MARGIN else "MIS"
+            
+            txn_type_str = "BUY" if transaction_type == TransactionType.BUY else "SELL"
+            
+            resp = self._kite.convert_position(
+                exchange=exchange,
+                tradingsymbol=symbol,
+                transaction_type=txn_type_str,
+                position_type=position_type,
+                quantity=quantity,
+                old_product=old_product_str,
+                new_product=new_product_str
+            )
+            
+            return OrderResponse(
+                status="ok",
+                order_id=str(resp.get("order_id", "")),
+                raw=resp
+            )
+        except Exception as e:
+            return OrderResponse(status="error", order_id=None, message=str(e))
+
+    def place_basket_orders(self, requests: List[OrderRequest]) -> List[OrderResponse]:
+        """
+        Place multiple orders atomically (best effort).
+        For Zerodha, we place orders sequentially but return all results.
+        This is useful for placing fresh order + SL order together.
+        
+        Args:
+            requests: List of OrderRequest objects
+            
+        Returns:
+            List of OrderResponse objects (one per request)
+        """
+        if not self._kite:
+            return [OrderResponse(status="error", order_id=None, message="unauthenticated") for _ in requests]
+        
+        results: List[OrderResponse] = []
+        
+        for req in requests:
+            try:
+                resp = self.place_order(req)
+                results.append(resp)
+            except Exception as e:
+                results.append(OrderResponse(status="error", order_id=None, message=str(e)))
+        
+        return results
 
     def place_gtt_order(self, symbol: str, quantity: int, price: float, transaction_type: str, order_type: str, exchange: str, product: str, tag: str = "Unknown", limit_price: Optional[float] = None) -> OrderResponse:
         """

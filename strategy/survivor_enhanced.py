@@ -7,6 +7,12 @@ Enhancements over base strategy:
 3. Position limits and risk management
 4. Stop-loss and time-based exits
 5. Volatility-adjusted position sizing
+6. ✅ Automatic broker-level SL order placement (NEW)
+   - Places SL orders immediately after fresh orders
+   - Configurable SL percentage (default 60%)
+   - Supports STOP_LIMIT and STOP order types
+   - Tracks SL order IDs per position
+   - Cancels SL orders on manual exit
 """
 
 import os
@@ -61,6 +67,9 @@ class PositionInfo:
     option_type: str
     current_pnl: float = 0.0
     highest_pnl: float = 0.0  # For trailing stop
+    sl_order_id: Optional[str] = None  # Track SL order ID
+    sl_price: float = 0.0  # SL trigger price
+    sl_limit_price: float = 0.0  # SL limit price (for STOP_LIMIT orders)
 
 
 class EnhancedSurvivorStrategy(SurvivorStrategy):
@@ -84,7 +93,9 @@ class EnhancedSurvivorStrategy(SurvivorStrategy):
        - Position sizing based on volatility
        
     4. Risk Management:
-       - Stop-loss per position (premium-based)
+       - ✅ Automatic broker-level SL orders (NEW)
+       - Configurable SL percentage per position
+       - SL order tracking and correlation
        - Trailing stop-loss option
        - Max daily loss limit
        - Time-based square off
@@ -93,6 +104,14 @@ class EnhancedSurvivorStrategy(SurvivorStrategy):
        - Trade journaling
        - Performance metrics
        - Filter rejection tracking
+       
+    6. SL Order Management:
+       - Places SL orders immediately after fresh order execution
+       - Configurable SL percentage (default: 60% of entry price)
+       - Supports STOP (SL-M) and STOP_LIMIT (SL) order types
+       - Tracks SL order IDs linked to positions
+       - Automatically cancels SL orders on manual position exit
+       - Monitors broker SL execution status
     """
     
     def __init__(self, broker, config, order_tracker):
@@ -116,7 +135,11 @@ class EnhancedSurvivorStrategy(SurvivorStrategy):
         self.max_consecutive_losses = config.get('max_consecutive_losses', 2)
         
         # Risk management
-        self.stop_loss_multiplier = config.get('stop_loss_multiplier', 2.0)  # Exit if premium doubles
+        self.sl_enabled = config.get('sl_enabled', True)  # Enable automatic SL order placement
+        self.sl_percentage = config.get('sl_percentage', 60)  # SL at 60% of entry price
+        self.sl_order_type_str = config.get('sl_order_type', 'STOP_LIMIT')  # STOP or STOP_LIMIT
+        self.sl_limit_buffer = config.get('sl_limit_buffer', 5.0)  # Points buffer for limit price
+        self.stop_loss_multiplier = config.get('stop_loss_multiplier', 2.0)  # Legacy: Exit if premium doubles
         self.trailing_stop_enabled = config.get('trailing_stop_enabled', False)
         self.trailing_stop_distance = config.get('trailing_stop_distance', 0.5)  # 50% of max profit
         self.max_daily_loss_percent = config.get('max_daily_loss_percent', -3.0)
@@ -363,7 +386,15 @@ class EnhancedSurvivorStrategy(SurvivorStrategy):
         return True, "Position limits OK"
         
     def _check_stop_losses(self):
-        """Check and exit positions that hit stop-loss"""
+        """
+        Check positions for stop-loss conditions.
+        
+        NOTE: When sl_enabled is True, broker-level SL orders are already placed,
+        so the broker will automatically exit positions. This method primarily:
+        1. Monitors positions without broker SL (fallback/legacy mode)
+        2. Tracks position P&L for reporting
+        3. Handles trailing stop logic (if enabled)
+        """
         positions_to_exit = []
         
         for symbol, position in self.positions.items():
@@ -378,14 +409,32 @@ class EnhancedSurvivorStrategy(SurvivorStrategy):
                 # Update highest P&L for trailing stop
                 if position.current_pnl > position.highest_pnl:
                     position.highest_pnl = position.current_pnl
-                    
-                # Check stop-loss (premium doubled = 100% loss on short)
-                stop_price = position.entry_price * self.stop_loss_multiplier
-                if current_price >= stop_price:
-                    positions_to_exit.append((symbol, position, "STOP_LOSS"))
-                    continue
-                    
-                # Check trailing stop
+                
+                # Skip manual SL check if broker SL order is active
+                if self.sl_enabled and position.sl_order_id:
+                    # Check if SL order is still open
+                    sl_order = self.broker.get_order(position.sl_order_id)
+                    if sl_order and sl_order.get('status') in ['OPEN', 'PENDING', 'TRIGGER PENDING']:
+                        # SL order is active, broker will handle exit
+                        continue
+                    elif sl_order and sl_order.get('status') in ['COMPLETE', 'FILLED']:
+                        # SL was hit and executed by broker
+                        logger.warning(f"SL executed by broker for {symbol}. Removing from tracking.")
+                        positions_to_exit.append((symbol, position, "BROKER_SL_HIT"))
+                        continue
+                    else:
+                        # SL order status unknown or cancelled, fall back to manual check
+                        logger.warning(f"SL order {position.sl_order_id} for {symbol} not active. Status: {sl_order.get('status') if sl_order else 'N/A'}")
+                
+                # Manual SL check (fallback when sl_enabled is False or SL order failed)
+                if not self.sl_enabled or not position.sl_order_id:
+                    # Check legacy stop-loss (premium doubled = 100% loss on short)
+                    stop_price = position.entry_price * self.stop_loss_multiplier
+                    if current_price >= stop_price:
+                        positions_to_exit.append((symbol, position, "STOP_LOSS"))
+                        continue
+                
+                # Check trailing stop (always check, regardless of broker SL)
                 if self.trailing_stop_enabled:
                     trailing_trigger = position.highest_pnl * (1 - self.trailing_stop_distance)
                     if position.current_pnl < trailing_trigger and position.highest_pnl > 0:
@@ -399,9 +448,125 @@ class EnhancedSurvivorStrategy(SurvivorStrategy):
             logger.warning(f"Exiting {symbol} due to {reason}. P&L: ₹{position.current_pnl:.2f}")
             self._exit_position(symbol, position)
             
+    def _calculate_sl_prices(self, entry_price: float) -> Tuple[float, float]:
+        """
+        Calculate SL trigger and limit prices based on entry price and configured SL percentage.
+        
+        For SHORT positions (options selling):
+        - SL trigger = entry_price * (1 + sl_percentage/100)
+        - SL limit = trigger + buffer (for STOP_LIMIT orders)
+        
+        Args:
+            entry_price: Entry price of the position
+            
+        Returns:
+            Tuple of (trigger_price, limit_price)
+        """
+        # Calculate SL trigger price (adverse move for shorts)
+        sl_multiplier = 1 + (self.sl_percentage / 100)
+        trigger_price = round(entry_price * sl_multiplier, 2)
+        
+        # Calculate limit price with buffer (for STOP_LIMIT orders)
+        limit_price = round(trigger_price + self.sl_limit_buffer, 2)
+        
+        return trigger_price, limit_price
+    
+    def _place_sl_order(self, symbol: str, quantity: int, entry_price: float, 
+                        option_type: str, fresh_order_id: str) -> Optional[str]:
+        """
+        Place a Stop-Loss order for a freshly entered position.
+        
+        Args:
+            symbol: Trading symbol
+            quantity: Quantity to cover
+            entry_price: Entry price for SL calculation
+            option_type: 'PE' or 'CE'
+            fresh_order_id: ID of the fresh order (for tracking)
+            
+        Returns:
+            SL order ID if successful, None otherwise
+        """
+        if not self.sl_enabled:
+            logger.info(f"SL orders disabled. No SL placed for {symbol}")
+            return None
+            
+        try:
+            # Calculate SL prices
+            trigger_price, limit_price = self._calculate_sl_prices(entry_price)
+            
+            # Determine order type
+            if self.sl_order_type_str == "STOP":
+                order_type = OrderType.STOP  # SL-M (Stop Loss Market)
+                sl_price = trigger_price
+            else:
+                order_type = OrderType.STOP_LIMIT  # SL (Stop Loss Limit)
+                sl_price = limit_price
+            
+            # Create SL order request (BUY to cover short position)
+            req = OrderRequest(
+                symbol=symbol,
+                exchange=Exchange.NFO,
+                transaction_type=TransactionType.BUY,  # Buy to cover short
+                quantity=quantity,
+                product_type=ProductType.MARGIN,
+                order_type=order_type,
+                price=sl_price if order_type == OrderType.STOP_LIMIT else 0,
+                stop_price=trigger_price,
+                tag=f"SurvivorEnhanced_SL_{fresh_order_id}"
+            )
+            
+            # Place SL order
+            order_resp = self.broker.place_order(req)
+            
+            if order_resp.status == "ok":
+                sl_order_id = str(order_resp.order_id)
+                logger.info(
+                    f"SL order placed for {symbol}: ID={sl_order_id}, "
+                    f"Trigger=₹{trigger_price}, Limit=₹{limit_price} "
+                    f"({self.sl_percentage}% SL)"
+                )
+                return sl_order_id
+            else:
+                logger.error(f"Failed to place SL order for {symbol}: {order_resp.message}")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Error placing SL order for {symbol}: {e}")
+            return None
+    
+    def _cancel_sl_order(self, sl_order_id: str, symbol: str) -> bool:
+        """
+        Cancel a Stop-Loss order when position is manually exited.
+        
+        Args:
+            sl_order_id: ID of the SL order to cancel
+            symbol: Trading symbol for logging
+            
+        Returns:
+            True if cancelled successfully, False otherwise
+        """
+        if not sl_order_id:
+            return True
+            
+        try:
+            order_resp = self.broker.cancel_order(sl_order_id)
+            if order_resp.status == "ok":
+                logger.info(f"SL order {sl_order_id} cancelled for {symbol}")
+                return True
+            else:
+                logger.warning(f"Failed to cancel SL order {sl_order_id} for {symbol}: {order_resp.message}")
+                return False
+        except Exception as e:
+            logger.error(f"Error cancelling SL order {sl_order_id} for {symbol}: {e}")
+            return False
+    
     def _exit_position(self, symbol: str, position: PositionInfo):
         """Exit a position by buying back the option"""
         try:
+            # First, cancel any existing SL order for this position
+            if position.sl_order_id:
+                self._cancel_sl_order(position.sl_order_id, symbol)
+            
             # Place buy order to close short position
             req = OrderRequest(
                 symbol=symbol,
@@ -674,8 +839,9 @@ class EnhancedSurvivorStrategy(SurvivorStrategy):
             
     def _place_order_enhanced(self, symbol: str, quantity: int, price: float, 
                               option_type: str, indicators: TechnicalIndicators) -> bool:
-        """Enhanced order placement with position tracking"""
+        """Enhanced order placement with position tracking and automatic SL order"""
         try:
+            # Step 1: Place fresh order (SELL for short options)
             req = OrderRequest(
                 symbol=symbol,
                 exchange=Exchange.NFO,
@@ -689,24 +855,62 @@ class EnhancedSurvivorStrategy(SurvivorStrategy):
             
             order_resp = self.broker.place_order(req)
             
-            if order_resp.status == "ok":
-                # Track the position
-                self.positions[symbol] = PositionInfo(
-                    symbol=symbol,
-                    entry_price=price,
-                    entry_time=datetime.now(),
-                    quantity=quantity,
-                    option_type=option_type
-                )
-                
-                # Record the trade
-                self._record_trade(option_type, symbol, quantity, price, indicators, 'EXECUTED')
-                
-                logger.info(f"Order placed successfully: {order_resp.order_id}")
-                return True
-            else:
+            if order_resp.status != "ok":
                 logger.error(f"Order placement failed: {order_resp.message}")
                 return False
+            
+            fresh_order_id = str(order_resp.order_id)
+            logger.info(f"Fresh order placed successfully: {fresh_order_id}")
+            
+            # Step 2: Calculate SL prices
+            trigger_price, limit_price = self._calculate_sl_prices(price)
+            
+            # Step 3: Place SL order immediately (if enabled)
+            sl_order_id = None
+            if self.sl_enabled:
+                sl_order_id = self._place_sl_order(
+                    symbol=symbol,
+                    quantity=quantity,
+                    entry_price=price,
+                    option_type=option_type,
+                    fresh_order_id=fresh_order_id
+                )
+                
+                if sl_order_id:
+                    logger.info(
+                        f"SL protection active for {symbol}: {self.sl_percentage}% "
+                        f"(Trigger: ₹{trigger_price}, Limit: ₹{limit_price})"
+                    )
+                else:
+                    logger.warning(
+                        f"SL order failed for {symbol}. Position is UNPROTECTED! "
+                        f"Consider manual exit or position monitoring."
+                    )
+            else:
+                logger.info(f"SL orders disabled. Position {symbol} has no automatic protection.")
+            
+            # Step 4: Track the position with SL info
+            self.positions[symbol] = PositionInfo(
+                symbol=symbol,
+                entry_price=price,
+                entry_time=datetime.now(),
+                quantity=quantity,
+                option_type=option_type,
+                sl_order_id=sl_order_id,
+                sl_price=trigger_price,
+                sl_limit_price=limit_price
+            )
+            
+            # Step 5: Record the trade
+            self._record_trade(option_type, symbol, quantity, price, indicators, 'EXECUTED')
+            
+            # Step 6: Log position summary
+            logger.info(
+                f"Position established - Symbol: {symbol}, Qty: {quantity}, "
+                f"Entry: ₹{price}, SL: {self.sl_percentage}% @ ₹{trigger_price}, "
+                f"SL Order: {sl_order_id or 'N/A'}"
+            )
+            return True
                 
         except Exception as e:
             logger.error(f"Error placing order: {e}")
@@ -714,17 +918,27 @@ class EnhancedSurvivorStrategy(SurvivorStrategy):
             
     def get_strategy_stats(self) -> Dict:
         """Get comprehensive strategy statistics"""
+        # Count positions with broker SL protection
+        protected_positions = sum(1 for p in self.positions.values() if p.sl_order_id)
+        unprotected_positions = len(self.positions) - protected_positions
+        
         return {
             'positions': {
                 'pe_count': self.pe_positions_count,
                 'ce_count': self.ce_positions_count,
                 'total': len(self.positions),
+                'protected_by_sl': protected_positions,
+                'unprotected': unprotected_positions,
                 'details': [
                     {
                         'symbol': p.symbol,
                         'type': p.option_type,
                         'entry': p.entry_price,
-                        'current_pnl': p.current_pnl
+                        'current_pnl': p.current_pnl,
+                        'sl_price': p.sl_price,
+                        'sl_limit_price': p.sl_limit_price,
+                        'sl_order_id': p.sl_order_id,
+                        'protected': p.sl_order_id is not None
                     }
                     for p in self.positions.values()
                 ]
@@ -734,6 +948,14 @@ class EnhancedSurvivorStrategy(SurvivorStrategy):
                 'trades_taken': len(self.daily_trades),
                 'trades_rejected': len(self.rejected_trades),
                 'consecutive_losses': self.consecutive_losses
+            },
+            'risk_management': {
+                'sl_enabled': self.sl_enabled,
+                'sl_percentage': self.sl_percentage,
+                'sl_order_type': self.sl_order_type_str,
+                'sl_limit_buffer': self.sl_limit_buffer,
+                'stop_loss_multiplier': self.stop_loss_multiplier,
+                'trailing_stop_enabled': self.trailing_stop_enabled
             },
             'filters': {
                 'entry_filter_type': self.entry_filter_type,

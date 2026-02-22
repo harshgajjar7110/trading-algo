@@ -99,17 +99,23 @@ default:
   # ============================================================================
   
   # Stop-loss settings
-  stop_loss_multiplier: 2.0    # Exit if premium doubles (200% of entry)
+  sl_enabled: true                  # Enable automatic SL order placement
+  sl_percentage: 60                 # SL at 60% of entry price (for shorts: entry * 1.60)
+  sl_order_type: "STOP_LIMIT"       # STOP (SL-M) or STOP_LIMIT (SL)
+  sl_limit_buffer: 5.0              # Points buffer for limit price (for SL orders)
+  
+  # Legacy stop-loss multiplier (used when sl_enabled is false)
+  stop_loss_multiplier: 2.0         # Exit if premium doubles (200% of entry)
   
   # Trailing stop (optional)
   trailing_stop_enabled: false
-  trailing_stop_distance: 0.5  # Exit if profit falls 50% from peak
+  trailing_stop_distance: 0.5       # Exit if profit falls 50% from peak
   
   # Daily loss limit
-  max_daily_loss_percent: -3.0  # Stop trading at -3% daily loss
+  max_daily_loss_percent: -3.0      # Stop trading at -3% daily loss
   
   # Time-based square off
-  square_off_time: "15:15"      # Close all positions at this time
+  square_off_time: "15:15"          # Close all positions at this time
 
   # ============================================================================
   # ENHANCED: DYNAMIC GAP ADJUSTMENT

@@ -27,6 +27,8 @@ class BrokerCapabilities:
     supports_cover_order: bool = False
     supports_multileg_order: bool = False
     supports_basket_orders: bool = False
+    supports_exit_positions: bool = False
+    supports_convert_position: bool = False
 
 
 @dataclass

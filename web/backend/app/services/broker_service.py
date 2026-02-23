@@ -56,6 +56,17 @@ class BrokerService:
             self._broker = BrokerGateway.from_name(os.getenv("BROKER_NAME"))
         return self._broker
     
+    def _sanitize_error(self, error: Exception) -> str:
+        """Sanitize error messages to prevent leaking sensitive info."""
+        error_msg = str(error)
+        lower_msg = error_msg.lower()
+
+        # Check for auth/sensitive keywords
+        if any(k in lower_msg for k in ["api_key", "access_token", "unauthenticated", "invalid token"]):
+            return "Authentication failed. Please go to Auth page and re-authenticate."
+
+        return error_msg
+
     def reinitialize(self) -> None:
         """Re-initialize the broker with current credentials."""
         # Clear the cached broker instance
@@ -123,11 +134,8 @@ class BrokerService:
             )
             
         except Exception as e:
-            error_msg = str(e)
-            print(f"Error getting positions: {error_msg}")
-            # Check for common auth errors
-            if "api_key" in error_msg.lower() or "access_token" in error_msg.lower() or "unauthenticated" in error_msg.lower():
-                error_msg = "Authentication failed. Please go to Auth page and re-authenticate."
+            error_msg = self._sanitize_error(e)
+            print(f"Error getting positions: {str(e)}")
             return PositionsResponse(
                 positions=[],
                 total_pnl=0.0,
@@ -181,6 +189,7 @@ class BrokerService:
             )
             
         except Exception as e:
+            print(f"Error getting orders: {self._sanitize_error(e)}")
             return OrdersResponse(orders=[], count=0)
     
     def get_trades(self) -> TradesResponse:
@@ -217,6 +226,7 @@ class BrokerService:
             )
             
         except Exception as e:
+            print(f"Error getting trades: {self._sanitize_error(e)}")
             return TradesResponse(trades=[], count=0)
     
     def get_quote(self, symbol: str) -> Quote:

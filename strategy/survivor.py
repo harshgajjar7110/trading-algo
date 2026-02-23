@@ -247,7 +247,10 @@ class SurvivorStrategy:
 
             # Find suitable PE option with adequate premium
             temp_gap = self.strat_var_pe_symbol_gap
-            while True:
+            max_retries = 20
+            retry_count = 0
+            while retry_count < max_retries:
+                retry_count += 1
                 # Find PE instrument at specified gap from current price
                 instrument = self._find_nifty_symbol_from_gap("PE", current_price, gap=temp_gap)
                 if not instrument:
@@ -275,6 +278,10 @@ class SurvivorStrategy:
                 # Set reset flag to enable reset logic
                 self.pe_reset_gap_flag = 1
                 break
+
+            if retry_count >= max_retries:
+                logger.error(f"Max retries reached while finding PE instrument. Last checked gap: {temp_gap}")
+                return
 
     def _handle_ce_trade(self, current_price):
         """
@@ -323,8 +330,11 @@ class SurvivorStrategy:
             total_quantity = sell_multiplier * self.strat_var_ce_quantity
 
             # Find suitable CE option with adequate premium
-            temp_gap = self.strat_var_ce_symbol_gap 
-            while True:
+            temp_gap = self.strat_var_ce_symbol_gap
+            max_retries = 20
+            retry_count = 0
+            while retry_count < max_retries:
+                retry_count += 1
                 # Find CE instrument at specified gap from current price
                 instrument = self._find_nifty_symbol_from_gap("CE", current_price, gap=temp_gap)
                 if not instrument:
@@ -351,6 +361,10 @@ class SurvivorStrategy:
                 # Set reset flag to enable reset logic
                 self.ce_reset_gap_flag = 1
                 break
+
+            if retry_count >= max_retries:
+                logger.error(f"Max retries reached while finding CE instrument. Last checked gap: {temp_gap}")
+                return
 
     def _reset_reference_values(self, current_price):
         """

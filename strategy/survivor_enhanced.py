@@ -166,8 +166,6 @@ class EnhancedSurvivorStrategy(SurvivorStrategy):
         self.profit_check_interval = config.get('profit_check_interval', 20)  # Check profit every 5 minutes (300 seconds)
         self.last_profit_check_time = datetime.now()  # Track last profit check time
         
-        print(',,,,==>',config)
-        
         # Dynamic gap adjustment
         self.enable_dynamic_gaps = config.get('enable_dynamic_gaps', False)
         self.atr_multiplier_pe = config.get('atr_multiplier_pe', 2.0)
@@ -964,9 +962,7 @@ class EnhancedSurvivorStrategy(SurvivorStrategy):
             self._check_stop_losses()
             
         # Check profit targets on configured interval (default: every 5 minutes)
-        print("====================s==",  self.positions , self.profit_target_enabled)
         if self.positions and self.profit_target_enabled:
-            print("========g=======fg=======")
             self._check_profit_targets()
             
         # Check daily loss limit
@@ -1024,7 +1020,10 @@ class EnhancedSurvivorStrategy(SurvivorStrategy):
         
         # Find and execute trade
         temp_gap = self.strat_var_pe_symbol_gap
-        while True:
+        max_retries = 20
+        retry_count = 0
+        while retry_count < max_retries:
+            retry_count += 1
             instrument = self._find_nifty_symbol_from_gap("PE", current_price, gap=temp_gap)
             if not instrument:
                 logger.warning(f"No suitable PE instrument found with gap {temp_gap}")
@@ -1050,6 +1049,9 @@ class EnhancedSurvivorStrategy(SurvivorStrategy):
                 self.pe_reset_gap_flag = 1
                 
             break
+
+        if retry_count >= max_retries:
+            logger.error(f"Max retries reached while finding PE instrument. Last checked gap: {temp_gap}")
             
     def _handle_ce_trade_enhanced(self, current_price: float, indicators: TechnicalIndicators):
         """Enhanced CE trade handling with filters"""
@@ -1092,7 +1094,10 @@ class EnhancedSurvivorStrategy(SurvivorStrategy):
         
         # Find and execute trade
         temp_gap = self.strat_var_ce_symbol_gap
-        while True:
+        max_retries = 20
+        retry_count = 0
+        while retry_count < max_retries:
+            retry_count += 1
             instrument = self._find_nifty_symbol_from_gap("CE", current_price, gap=temp_gap)
             if not instrument:
                 logger.warning(f"No suitable CE instrument found with gap {temp_gap}")
@@ -1118,6 +1123,9 @@ class EnhancedSurvivorStrategy(SurvivorStrategy):
                 self.ce_reset_gap_flag = 1
                 
             break
+
+        if retry_count >= max_retries:
+            logger.error(f"Max retries reached while finding CE instrument. Last checked gap: {temp_gap}")
             
     def _place_order_enhanced(self, symbol: str, quantity: int, price: float,
                               option_type: str, indicators: TechnicalIndicators) -> bool:

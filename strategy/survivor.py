@@ -1094,7 +1094,9 @@ PARAMETER GROUPS:
     # Define websocket event handlers for real-time data processing
     
     def on_ticks(ws, ticks):
-        logger.debug("Received ticks: {}".format(ticks))
+        # Only log tick data if explicitly enabled in config (disabled by default)
+        if config.get('log_tick_data', False):
+            logger.debug("Received ticks: {}".format(ticks))
         # Send tick data to strategy processing queue
         if isinstance(ticks, list):
             dispatcher.dispatch(ticks)

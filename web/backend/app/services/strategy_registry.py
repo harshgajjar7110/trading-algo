@@ -85,32 +85,7 @@ class StrategyRegistry:
         """Register built-in strategies"""
         project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
         
-        # Survivor Strategy (Base)
-        self.register(StrategyInfo(
-            id="survivor",
-            name="Survivor Strategy",
-            description="""
-            Classic gap-based options selling strategy. 
-            Sells PE when NIFTY rises, CE when NIFTY falls.
-            Simple and reliable for steady income.
-            """,
-            class_path="strategy.survivor:SurvivorStrategy",
-            config_path=os.path.join(project_root, "strategy", "configs", "survivor.yml"),
-            version="1.0.0",
-            tags=["options", "selling", "gap-based", "nifty"],
-            risk_level="medium",
-            recommended_capital="₹5L+",
-            default_params={
-                "pe_gap": 40,
-                "ce_gap": 40,
-                "pe_symbol_gap": 800,
-                "ce_symbol_gap": 800,
-                "pe_quantity": 65,
-                "ce_quantity": 65,
-            }
-        ))
-        
-        # Enhanced Survivor Strategy
+        # Enhanced Survivor Strategy (Default)
         self.register(StrategyInfo(
             id="enhanced_survivor",
             name="Enhanced Survivor Strategy",
@@ -137,6 +112,34 @@ class StrategyRegistry:
                 "rsi_max": 70,
                 "max_positions_per_side": 3,
                 "stop_loss_multiplier": 2.0,
+                "sl_enabled": True,
+                "sl_percentage": 60,
+                "sl_reconcile_on_start": True,
+            }
+        ))
+        
+        # Survivor Strategy (Base)
+        self.register(StrategyInfo(
+            id="survivor",
+            name="Survivor Strategy",
+            description="""
+            Classic gap-based options selling strategy. 
+            Sells PE when NIFTY rises, CE when NIFTY falls.
+            Simple and reliable for steady income.
+            """,
+            class_path="strategy.survivor:SurvivorStrategy",
+            config_path=os.path.join(project_root, "strategy", "configs", "survivor.yml"),
+            version="1.0.0",
+            tags=["options", "selling", "gap-based", "nifty"],
+            risk_level="medium",
+            recommended_capital="₹5L+",
+            default_params={
+                "pe_gap": 40,
+                "ce_gap": 40,
+                "pe_symbol_gap": 800,
+                "ce_symbol_gap": 800,
+                "pe_quantity": 65,
+                "ce_quantity": 65,
             }
         ))
         

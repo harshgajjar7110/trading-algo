@@ -76,24 +76,39 @@ class StrategyStopResponse(BaseModel):
 
 class StrategyConfigUpdate(BaseModel):
     """Partial configuration update."""
+    # Core Parameters
     index_symbol: Optional[str] = None
     symbol_initials: Optional[str] = None
+
+    # Gap Parameters
     pe_gap: Optional[int] = None
     ce_gap: Optional[int] = None
     pe_reset_gap: Optional[int] = None
     ce_reset_gap: Optional[int] = None
+
+    # Strike Selection
     pe_symbol_gap: Optional[int] = None
     ce_symbol_gap: Optional[int] = None
+
+    # Position Sizing
     pe_quantity: Optional[int] = None
     ce_quantity: Optional[int] = None
+
+    # Risk Management
     min_price_to_sell: Optional[float] = None
     sell_multiplier_threshold: Optional[int] = None
+
+    # Reference Points
     pe_start_point: Optional[int] = None
     ce_start_point: Optional[int] = None
+
+    # Order Settings
     exchange: Optional[str] = None
     order_type: Optional[str] = None
     product_type: Optional[str] = None
     trans_type: Optional[str] = None
+
+    # Entry Filters
     entry_filter_type: Optional[str] = None
     rsi_period: Optional[int] = None
     rsi_min: Optional[int] = None
@@ -101,6 +116,69 @@ class StrategyConfigUpdate(BaseModel):
     adx_period: Optional[int] = None
     adx_threshold: Optional[int] = None
     ema_period: Optional[int] = None
+
+    # ============================================================
+    # ENHANCED: ATR Settings
+    # ============================================================
+    atr_period: Optional[int] = None
+    atr_history_days: Optional[int] = None
+
+    # ============================================================
+    # ENHANCED: Position Limits
+    # ============================================================
+    max_positions_per_side: Optional[int] = None
+    max_total_positions: Optional[int] = None
+    max_consecutive_losses: Optional[int] = None
+
+    # ============================================================
+    # ENHANCED: Stop-Loss Settings
+    # ============================================================
+    sl_enabled: Optional[bool] = None
+    sl_percentage: Optional[int] = None
+    sl_order_type: Optional[str] = None
+    sl_limit_buffer: Optional[float] = None
+    sl_reconcile_on_start: Optional[bool] = None
+    sl_state_file: Optional[str] = None
+
+    # ============================================================
+    # ENHANCED: Profit Target Settings
+    # ============================================================
+    profit_target_enabled: Optional[bool] = None
+    profit_target_percent: Optional[int] = None
+
+    # ============================================================
+    # ENHANCED: Legacy Stop-Loss
+    # ============================================================
+    stop_loss_multiplier: Optional[float] = None
+
+    # ============================================================
+    # ENHANCED: Trailing Stop
+    # ============================================================
+    trailing_stop_enabled: Optional[bool] = None
+    trailing_stop_distance: Optional[float] = None
+
+    # ============================================================
+    # ENHANCED: Daily Loss Limit
+    # ============================================================
+    max_daily_loss_percent: Optional[float] = None
+
+    # ============================================================
+    # ENHANCED: Time-based Square Off
+    # ============================================================
+    square_off_time: Optional[str] = None
+
+    # ============================================================
+    # ENHANCED: Dynamic Gap Adjustment
+    # ============================================================
+    enable_dynamic_gaps: Optional[bool] = None
+    atr_multiplier_pe: Optional[float] = None
+    atr_multiplier_ce: Optional[float] = None
+
+    # ============================================================
+    # ENHANCED: Volatility-based Position Sizing
+    # ============================================================
+    volatility_sizing: Optional[bool] = None
+    high_vol_size_reduction: Optional[float] = None
 
 
 class ConfigValidationResponse(BaseModel):

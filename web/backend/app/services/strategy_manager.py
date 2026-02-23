@@ -314,16 +314,18 @@ class StrategyManager:
         """
         try:
             # Import strategy components
-            from strategy.survivor import SurvivorStrategy
+            from strategy.survivor_enhanced import EnhancedSurvivorStrategy
             from brokers import BrokerGateway
             from dispatcher import DataDispatcher
             from orders import OrderTracker
             from queue import Queue
-            import logging
             
-            # Set up logging
-            logging.basicConfig(level=logging.INFO)
-            logger = logging.getLogger(__name__)
+            # Set up timestamped logging for this strategy run
+            from logger import setup_strategy_logging_with_name
+            logger = setup_strategy_logging_with_name("enhanced")
+            logger.info("=" * 70)
+            logger.info("STARTING ENHANCED SURVIVOR STRATEGY")
+            logger.info("=" * 70)
             
             # Load config
             config_path = settings.STRATEGY_CONFIG_PATH
@@ -338,8 +340,18 @@ class StrategyManager:
             dispatcher = DataDispatcher()
             dispatcher.register_main_queue(Queue())
             
-            # Initialize strategy
-            strategy = SurvivorStrategy(broker, config, order_tracker)
+            # Initialize strategy (Enhanced version with SL management)
+            strategy = EnhancedSurvivorStrategy(broker, config, order_tracker)
+            
+            # Run SL reconciliation at startup
+            if hasattr(strategy, 'reconcile_sl_at_startup'):
+                logger.info("=" * 60)
+                logger.info("RUNNING SL RECONCILIATION FOR EXISTING POSITIONS")
+                logger.info("=" * 60)
+                result = strategy.reconcile_sl_at_startup()
+                if result:
+                    logger.info(f"SL Reconciliation: {result.new_sl_placed} new SL orders placed "
+                               f"for {result.total_positions} positions")
             
             # Send initial state
             state_queue.put({

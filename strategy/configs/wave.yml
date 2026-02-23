@@ -36,3 +36,6 @@ default:
   # Order Type
   order_type: "LIMIT"
   variety: "REGULAR"
+  
+  # Logging configuration
+  log_tick_data: false              # Set to true to enable tick logging (very verbose)

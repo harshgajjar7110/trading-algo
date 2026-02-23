@@ -131,6 +131,18 @@ class StrategyManagerV2:
                     "current": value
                 })
         
+        # Extract SL configuration for display
+        sl_config = {
+            "enabled": preview_config.get('sl_enabled', False),
+            "percentage": preview_config.get('sl_percentage', 60),
+            "order_type": preview_config.get('sl_order_type', 'STOP_LIMIT'),
+            "limit_buffer": preview_config.get('sl_limit_buffer', 5.0),
+            "reconcile_on_start": preview_config.get('sl_reconcile_on_start', True),
+        }
+        
+        # Calculate potential SL levels for display
+        sl_preview = self._calculate_sl_preview(preview_config)
+        
         return {
             "strategy_id": strategy_id,
             "strategy_name": info.name,
@@ -140,6 +152,45 @@ class StrategyManagerV2:
             "differences_from_default": differences,
             "risk_level": info.risk_level,
             "recommended_capital": info.recommended_capital,
+            "sl_config": sl_config,
+            "sl_preview": sl_preview,
+            "requires_confirmation": True,
+            "confirmation_message": "Review & Start Strategy",
+        }
+    
+    def _calculate_sl_preview(self, config: Dict) -> Dict:
+        """
+        Calculate SL preview information based on configuration.
+        Shows what SL prices would be for typical entry prices.
+        """
+        sl_percentage = config.get('sl_percentage', 60)
+        sl_limit_buffer = config.get('sl_limit_buffer', 5.0)
+        sl_enabled = config.get('sl_enabled', False)
+        
+        if not sl_enabled:
+            return {
+                "enabled": False,
+                "message": "SL orders are disabled",
+            }
+        
+        # Example calculations for different entry prices (for short positions)
+        examples = []
+        for entry_price in [50.0, 100.0, 150.0, 200.0]:
+            trigger_price = round(entry_price * (1 + sl_percentage / 100), 2)
+            limit_price = round(trigger_price + sl_limit_buffer, 2)
+            examples.append({
+                "entry_price": entry_price,
+                "trigger_price": trigger_price,
+                "limit_price": limit_price,
+                "potential_loss_pct": sl_percentage,
+            })
+        
+        return {
+            "enabled": True,
+            "sl_percentage": sl_percentage,
+            "sl_limit_buffer": sl_limit_buffer,
+            "example_calculations": examples,
+            "message": f"SL will be placed at {sl_percentage}% above entry price for short positions",
         }
     
     def start(self, strategy_id: str, config_override: Optional[Dict] = None, confirmed: bool = False) -> Dict:
@@ -294,11 +345,16 @@ class StrategyManagerV2:
         
         time.sleep(1)
         
-        # If no strategy_id specified, use current
-        if strategy_id is None and self._current_instance:
-            strategy_id = self._current_instance.strategy_type.value
+        # Determine which strategy to use
+        if strategy_id is None:
+            if self._current_instance:
+                strategy_id = self._current_instance.strategy_type.value
+                logger.info(f"Restarting with current strategy: {strategy_id}")
+            else:
+                strategy_id = "enhanced_survivor"
+                logger.info(f"No current strategy instance, defaulting to: {strategy_id}")
         
-        return self.start(strategy_id or "survivor", config_override, confirmed)
+        return self.start(strategy_id, config_override, confirmed)
     
     def get_state(self) -> StrategyState:
         """Get current strategy state"""
@@ -410,7 +466,13 @@ class StrategyManagerV2:
             from dispatcher import DataDispatcher
             from orders import OrderTracker
             from queue import Queue
-            from logger import strategy_logger as logger
+            from logger import setup_strategy_logging_with_name
+            
+            # Set up timestamped logging for this strategy run
+            logger = setup_strategy_logging_with_name(strategy_id)
+            logger.info("=" * 70)
+            logger.info(f"STARTING STRATEGY: {strategy_id}")
+            logger.info("=" * 70)
             
             # Load strategy class dynamically
             registry = StrategyRegistry()
@@ -428,6 +490,31 @@ class StrategyManagerV2:
             # Initialize strategy
             logger.info(f"Initializing strategy: {strategy_id}")
             strategy = strategy_class(broker, config, order_tracker)
+            
+            # Run SL reconciliation at startup (for enhanced strategy)
+            if hasattr(strategy, 'reconcile_sl_at_startup'):
+                logger.info("=" * 60)
+                logger.info("REVIEW & START STRATEGY - SL RECONCILIATION")
+                logger.info("=" * 60)
+                logger.info("Calculating SL levels for existing positions before placing orders...")
+                
+                reconciliation_result = strategy.reconcile_sl_at_startup()
+                
+                if reconciliation_result:
+                    logger.info(f"SL Reconciliation Complete:")
+                    logger.info(f"  - Total positions found: {reconciliation_result.total_positions}")
+                    logger.info(f"  - New SL orders placed: {reconciliation_result.new_sl_placed}")
+                    logger.info(f"  - Errors: {len(reconciliation_result.errors)}")
+                    
+                    # Send reconciliation info to parent process
+                    state_queue.put({
+                        'type': 'SL_RECONCILIATION',
+                        'total_positions': reconciliation_result.total_positions,
+                        'new_sl_placed': reconciliation_result.new_sl_placed,
+                        'errors': reconciliation_result.errors,
+                    })
+                else:
+                    logger.info("SL reconciliation skipped (not enabled or not applicable)")
             
             # Send initial state
             state_queue.put({

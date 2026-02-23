@@ -16,6 +16,7 @@ The **Enhanced Survivor Strategy** builds upon the base Survivor Strategy with a
 | Dynamic gaps | ❌ | ✅ ATR-based |
 | Position limits | ❌ | ✅ Max per side/total |
 | Stop-loss | ❌ | ✅ Premium-based |
+| **Profit target** | ❌ | ✅ **60% of premium** |
 | Trailing stop | ❌ | ✅ Optional |
 | Time-based exit | ❌ | ✅ Square off time |
 | Daily loss limit | ❌ | ✅ Percentage-based |
@@ -124,6 +125,33 @@ max_consecutive_losses: 2     # Stop after 2 losses
 ### 4. Stop-Loss Management
 
 Protect against unlimited losses on short options.
+
+#### Profit Target (NEW)
+Automatically exit when premium decays by a specified percentage, capturing profits.
+
+```yaml
+profit_target_enabled: true
+profit_target_percent: 60
+```
+
+**Logic:**
+- Short sell option at entry price (e.g., ₹100)
+- Exit when premium decays to: ₹100 × (1 - 60/100) = ₹40
+- Captured profit: ₹60 per unit (60% of collected premium)
+
+**Benefits:**
+- Locks in profits when target is hit
+- Automatically cancels SL order on exit
+- Higher priority than trailing stop (exits first)
+
+**Example:**
+```
+Entry: Sell at ₹100
+Target: 60% profit = ₹60 per unit
+Exit Trigger: When price drops to ₹40
+Action: Cancel SL order, buy back at ₹40
+Result: ₹60 profit captured
+```
 
 #### Fixed Stop-Loss
 ```yaml

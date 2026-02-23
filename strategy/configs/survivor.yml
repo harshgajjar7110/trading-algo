@@ -5,9 +5,9 @@ default:
   ce_quantity: 65
   ce_reset_gap: 30
   ce_start_point: 0
-  ce_symbol_gap: 800
+  ce_symbol_gap: 900
   ema_period: 20
-  entry_filter_type: NONE
+  entry_filter_type: EMA
   exchange: NFO
   history_period_days: 5
   index_symbol: NSE:NIFTY 50
@@ -17,12 +17,15 @@ default:
   pe_quantity: 65
   pe_reset_gap: 30
   pe_start_point: 0
-  pe_symbol_gap: 800
+  pe_symbol_gap: 900
   product_type: NRML
   rsi_max: 50
   rsi_min: 50
   rsi_period: 14
-  sell_multiplier_threshold: 3
-  symbol_initials: NIFTY26FEB
+  sell_multiplier_threshold: 2
+  symbol_initials: NIFTY26302
   tag: Survivor
   trans_type: SELL
+  
+  # Logging configuration
+  log_tick_data: false              # Set to true to enable tick logging (very verbose)

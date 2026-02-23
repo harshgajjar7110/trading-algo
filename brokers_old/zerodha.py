@@ -176,8 +176,9 @@ class ZerodhaBroker(BrokerBase):
         This is the skeleton of the callback.
         The actual implementation has to be handled by the user
         """
-        # Callback to receive ticks.
-        logger.info("Ticks: {}".format(ticks))
+        # Callback to receive ticks - only log if explicitly enabled
+        if os.getenv('LOG_TICK_DATA', 'false').lower() == 'true':
+            logger.info("Ticks: {}".format(ticks))
         # self.tick_counter += 1
 
     def on_connect(self, ws, response):  # noqa

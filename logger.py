@@ -87,6 +87,57 @@ def setup_strategy_logging():
     return strategy_logger
 
 
+def setup_strategy_logging_with_name(strategy_name: str = "strategy"):
+    """
+    Setup separate logging for a specific strategy instance with timestamped log file.
+    Creates logs like: logs/enhanced_20250223_105830.log
+    
+    Args:
+        strategy_name: Name identifier for the strategy (e.g., 'enhanced', 'survivor', 'wave')
+    
+    Returns:
+        Logger instance configured to write to timestamped file
+    """
+    from datetime import datetime
+    
+    package_dir = os.path.dirname(os.path.abspath(__file__))
+    log_dir = os.path.join(package_dir, "logs")
+    if not os.path.exists(log_dir):
+        os.makedirs(log_dir)
+
+    # Create timestamped filename: strategy_name_YYYYMMDD_HHMMSS.log
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_filename = f"{strategy_name}_{timestamp}.log"
+    log_file = os.path.join(log_dir, log_filename)
+
+    # Create unique logger name for this instance
+    logger_name = f"strategy.{strategy_name}.{timestamp}"
+    strategy_logger = logging.getLogger(logger_name)
+    strategy_logger.setLevel(logging.DEBUG)
+    
+    # Prevent propagation to parent loggers
+    strategy_logger.propagate = False
+
+    # Remove any existing handlers (fresh start each time)
+    if strategy_logger.handlers:
+        strategy_logger.handlers.clear()
+
+    # Create file handler (no rotation for instance-specific logs)
+    file_handler = logging.FileHandler(log_file, mode='a')
+    
+    # Define formatter with timestamp
+    formatter = logging.Formatter(
+        fmt="%(asctime)s - %(levelname)s - %(filename)s:%(lineno)d - %(funcName)s - %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+    file_handler.setFormatter(formatter)
+    strategy_logger.addHandler(file_handler)
+
+    strategy_logger.info(f"Strategy logging initialized: {log_filename}")
+    strategy_logger.info(f"Strategy name: {strategy_name}")
+    return strategy_logger
+
+
 # Initialize and export the loggers
 logger = setup_logging()
 strategy_logger = setup_strategy_logging()

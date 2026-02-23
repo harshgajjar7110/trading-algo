@@ -26,8 +26,8 @@ class Settings(BaseSettings):
     # Broker settings (inherited from main project)
     BROKER_NAME: str = "zerodha"
     
-    # Strategy config path
-    STRATEGY_CONFIG_PATH: str = str(Path(__file__).parent.parent.parent.parent / "strategy" / "configs" / "survivor.yml")
+    # Strategy config path - Using enhanced strategy config
+    STRATEGY_CONFIG_PATH: str = str(Path(__file__).parent.parent.parent.parent / "strategy" / "configs" / "survivor_enhanced.yml")
     
     # WebSocket
     WS_HEARTBEAT_INTERVAL: int = 30  # seconds
@@ -55,8 +55,8 @@ class StrategyConfig(BaseModel):
     ce_reset_gap: int = 30
     
     # Strike Selection
-    pe_symbol_gap: int = 800
-    ce_symbol_gap: int = 800
+    pe_symbol_gap: int = 600
+    ce_symbol_gap: int = 600
     
     # Position Sizing
     pe_quantity: int = 65
@@ -86,6 +86,81 @@ class StrategyConfig(BaseModel):
     adx_threshold: int = 25
     ema_period: int = 20
     history_period_days: int = 5
-    
+
+    # ============================================================
+    # ENHANCED: ATR Settings
+    # ============================================================
+    atr_period: int = 14
+    atr_history_days: int = 5
+
+    # ============================================================
+    # ENHANCED: Position Limits
+    # ============================================================
+    max_positions_per_side: int = 3
+    max_total_positions: int = 5
+    max_consecutive_losses: int = 2
+
+    # ============================================================
+    # ENHANCED: Stop-Loss Settings
+    # ============================================================
+    sl_enabled: bool = True
+    sl_percentage: int = 60
+    sl_order_type: str = "STOP_LIMIT"
+    sl_limit_buffer: float = 0.05
+    sl_reconcile_on_start: bool = True
+    sl_state_file: str = "artifacts/survivor_enhanced_position_state.json"
+
+    # ============================================================
+    # ENHANCED: Profit Target Settings
+    # ============================================================
+    profit_target_enabled: bool = True
+    profit_target_percent: int = 60
+    profit_check_interval: int = 60  # Check every 60 seconds
+
+    # ============================================================
+    # ENHANCED: Volatility Sizing
+    # ============================================================
+    volatility_sizing: bool = True
+    high_vol_size_reduction: float = 0.5
+
+    # ============================================================
+    # ENHANCED: Logging
+    # ============================================================
+    log_tick_data: bool = False
+
+    # ============================================================
+    # ENHANCED: Legacy Stop-Loss
+    # ============================================================
+    stop_loss_multiplier: float = 2.0
+
+    # ============================================================
+    # ENHANCED: Trailing Stop
+    # ============================================================
+    trailing_stop_enabled: bool = False
+    trailing_stop_distance: float = 0.5
+
+    # ============================================================
+    # ENHANCED: Daily Loss Limit
+    # ============================================================
+    max_daily_loss_percent: float = -3.0
+
+    # ============================================================
+    # ENHANCED: Time-based Square Off
+    # ============================================================
+    square_off_time: str = "15:15"
+
+    # ============================================================
+    # ENHANCED: Dynamic Gap Adjustment
+    # ============================================================
+    enable_dynamic_gaps: bool = True
+    atr_multiplier_pe: float = 2.0
+    atr_multiplier_ce: float = 2.0
+
+    # ============================================================
+    # ENHANCED: Volatility-based Position Sizing
+    # ============================================================
+    volatility_sizing: bool = True
+    high_vol_size_reduction: float = 0.5
+
     class Config:
         extra = "ignore"

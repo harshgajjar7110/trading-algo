@@ -40,6 +40,8 @@ export interface StrategyState {
   last_update: string | null;
   error_message: string | null;
   uptime_seconds: number | null;
+  current_strategy?: string | null;
+  instance_id?: string | null;
 }
 
 export interface StrategyStartResponse {
@@ -101,6 +103,69 @@ export interface StrategyConfig {
   adx_threshold: number;
   ema_period: number;
   history_period_days: number;
+
+  // ============================================================
+  // ENHANCED: ATR Settings
+  // ============================================================
+  atr_period: number;
+  atr_history_days: number;
+
+  // ============================================================
+  // ENHANCED: Position Limits
+  // ============================================================
+  max_positions_per_side: number;
+  max_total_positions: number;
+  max_consecutive_losses: number;
+
+  // ============================================================
+  // ENHANCED: Stop-Loss Settings
+  // ============================================================
+  sl_enabled: boolean;
+  sl_percentage: number;
+  sl_order_type: string;
+  sl_limit_buffer: number;
+  sl_reconcile_on_start: boolean;
+  sl_state_file: string;
+
+  // ============================================================
+  // ENHANCED: Profit Target Settings
+  // ============================================================
+  profit_target_enabled: boolean;
+  profit_target_percent: number;
+
+  // ============================================================
+  // ENHANCED: Legacy Stop-Loss
+  // ============================================================
+  stop_loss_multiplier: number;
+
+  // ============================================================
+  // ENHANCED: Trailing Stop
+  // ============================================================
+  trailing_stop_enabled: boolean;
+  trailing_stop_distance: number;
+
+  // ============================================================
+  // ENHANCED: Daily Loss Limit
+  // ============================================================
+  max_daily_loss_percent: number;
+
+  // ============================================================
+  // ENHANCED: Time-based Square Off
+  // ============================================================
+  square_off_time: string;
+
+  // ============================================================
+  // ENHANCED: Dynamic Gap Adjustment
+  // ============================================================
+  enable_dynamic_gaps: boolean;
+  atr_multiplier_pe: number;
+  atr_multiplier_ce: number;
+
+  // ============================================================
+  // ENHANCED: Volatility-based Position Sizing
+  // ============================================================
+  volatility_sizing: boolean;
+  high_vol_size_reduction: number;
 }
 
 export interface ConfigValidationResponse {

@@ -449,7 +449,7 @@ class ZerodhaDriver(BrokerDriver):
                 quantity=request.quantity,
                 product=product,
                 order_type=order_type,
-                price=request.price if request.order_type == OrderType.LIMIT else None,
+                price=request.price if request.order_type in (OrderType.LIMIT, OrderType.STOP_LIMIT) else None,
                 validity=validity,
                 trigger_price=request.stop_price,
                 tag=request.tag,

@@ -38,8 +38,8 @@ default:
   ce_reset_gap: 30        # Reset CE reference if price rises this much
   
   # Strike selection gaps (distance from spot)
-  pe_symbol_gap: 800      # Sell PE this many points below spot
-  ce_symbol_gap: 800      # Sell CE this many points above spot
+  pe_symbol_gap: 600      # Sell PE this many points below spot (OTM)
+  ce_symbol_gap: 600      # Sell CE this many points above spot (OTM)
   
   # ============================================================================
   # POSITION SIZING (Base)
@@ -102,7 +102,15 @@ default:
   sl_enabled: true                  # Enable automatic SL order placement
   sl_percentage: 60                 # SL at 60% of entry price (for shorts: entry * 1.60)
   sl_order_type: "STOP_LIMIT"       # STOP (SL-M) or STOP_LIMIT (SL)
-  sl_limit_buffer: 5.0              # Points buffer for limit price (for SL orders)
+  sl_limit_buffer: 0.05             # Points buffer for limit price (for SL orders)
+  sl_reconcile_on_start: true       # Run SL reconciliation at algo startup
+  sl_state_file: "artifacts/survivor_enhanced_position_state.json"  # Path to position state file
+  
+  # Profit target settings
+  profit_target_enabled: true       # Enable profit target exit
+  profit_target_percent: 55        # Exit when 60% of premium collected as profit
+                                   # Example: Sell at 100, exit at 40 (60 profit captured)
+  profit_check_interval: 20        # Check profit targets every N seconds (default: 300 = 5 minutes)
   
   # Legacy stop-loss multiplier (used when sl_enabled is false)
   stop_loss_multiplier: 2.0         # Exit if premium doubles (200% of entry)
@@ -115,7 +123,14 @@ default:
   max_daily_loss_percent: -3.0      # Stop trading at -3% daily loss
   
   # Time-based square off
-  square_off_time: "15:15"          # Close all positions at this time
+  square_off_time: "15:25"          # Close all positions at this time
+
+  # ============================================================================
+  # LOGGING CONFIGURATION
+  # ============================================================================
+  
+  # Tick data logging - Set to true to enable verbose tick logging (disabled by default)
+  log_tick_data: false              # Logs every tick received (very verbose!)
 
   # ============================================================================
   # ENHANCED: DYNAMIC GAP ADJUSTMENT
@@ -158,6 +173,8 @@ conservative:
   ce_gap: 50
   enable_dynamic_gaps: true
   volatility_sizing: true
+  profit_target_enabled: true
+  profit_target_percent: 60
 
 # Aggressive - More trades, higher risk
 aggressive:
@@ -172,6 +189,8 @@ aggressive:
   ce_gap: 25
   enable_dynamic_gaps: false
   volatility_sizing: false
+  profit_target_enabled: true
+  profit_target_percent: 50
 
 # Trend Following - Only trade with strong trends
 trend_following:
@@ -183,6 +202,8 @@ trend_following:
   max_positions_per_side: 3
   enable_dynamic_gaps: true
   volatility_sizing: true
+  profit_target_enabled: true
+  profit_target_percent: 60
 
 # Mean Reversion - Trade against extremes (counter-trend)
 mean_reversion:

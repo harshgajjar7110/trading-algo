@@ -15,7 +15,6 @@ from enum import Enum
 class StrategyType(str, Enum):
     """Available strategy types"""
     SURVIVOR = "survivor"
-    ENHANCED_SURVIVOR = "enhanced_survivor"
     WAVE = "wave"
 
 
@@ -85,17 +84,17 @@ class StrategyRegistry:
         """Register built-in strategies"""
         project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
         
-        # Enhanced Survivor Strategy (Default)
+        # Survivor Strategy (Default/Main)
         self.register(StrategyInfo(
-            id="enhanced_survivor",
-            name="Enhanced Survivor Strategy",
+            id="survivor",
+            name="Survivor Strategy",
             description="""
             Advanced options selling with technical filters (RSI, EMA, ADX),
             dynamic gaps, position limits, and stop-loss management.
             Better for volatile markets.
             """,
-            class_path="strategy.survivor_enhanced:EnhancedSurvivorStrategy",
-            config_path=os.path.join(project_root, "strategy", "configs", "survivor_enhanced.yml"),
+            class_path="strategy.survivor:SurvivorStrategy",
+            config_path=os.path.join(project_root, "strategy", "configs", "survivor.yml"),
             version="2.0.0",
             tags=["options", "selling", "technical-indicators", "risk-management"],
             risk_level="medium-high",
@@ -118,30 +117,15 @@ class StrategyRegistry:
             }
         ))
         
-        # Survivor Strategy (Base)
-        self.register(StrategyInfo(
-            id="survivor",
-            name="Survivor Strategy",
-            description="""
-            Classic gap-based options selling strategy. 
-            Sells PE when NIFTY rises, CE when NIFTY falls.
-            Simple and reliable for steady income.
-            """,
-            class_path="strategy.survivor:SurvivorStrategy",
-            config_path=os.path.join(project_root, "strategy", "configs", "survivor.yml"),
-            version="1.0.0",
-            tags=["options", "selling", "gap-based", "nifty"],
-            risk_level="medium",
-            recommended_capital="₹5L+",
-            default_params={
-                "pe_gap": 40,
-                "ce_gap": 40,
-                "pe_symbol_gap": 800,
-                "ce_symbol_gap": 800,
-                "pe_quantity": 65,
-                "ce_quantity": 65,
-            }
-        ))
+        # Deprecated: Original base Survivor Strategy (kept for reference)
+        # This is now replaced by the main SurvivorStrategy above which includes
+        # all enhanced features. The original base implementation is at:
+        # strategy/deprecated/survivor.py.bak
+        # self.register(StrategyInfo(
+        #     id="survivor_legacy",
+        #     name="Survivor Strategy (Legacy)",
+        #     ...
+        # ))
         
         # Wave Strategy (if config exists)
         wave_config = os.path.join(project_root, "strategy", "configs", "wave.yml")
@@ -245,7 +229,7 @@ class StrategyRegistry:
                 errors.append("Gaps must be positive")
         
         # Strategy-specific validations
-        if strategy_id == "enhanced_survivor":
+        if strategy_id == "survivor":
             filter_type = config.get('entry_filter_type', 'NONE')
             if filter_type not in ['NONE', 'RSI', 'EMA', 'ADX', 'ALL']:
                 errors.append("entry_filter_type must be one of: NONE, RSI, EMA, ADX, ALL")

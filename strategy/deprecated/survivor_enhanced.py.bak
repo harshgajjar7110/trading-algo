@@ -166,6 +166,11 @@ class EnhancedSurvivorStrategy(SurvivorStrategy):
         self.profit_check_interval = config.get('profit_check_interval', 20)  # Check profit every 5 minutes (300 seconds)
         self.last_profit_check_time = datetime.now()  # Track last profit check time
         
+        # DEBUG: Log profit target configuration
+        logger.debug(f"[PROFIT DEBUG] Strategy __init__: profit_target_enabled={self.profit_target_enabled}")
+        logger.debug(f"[PROFIT DEBUG] Strategy __init__: profit_target_percent={self.profit_target_percent}%")
+        logger.debug(f"[PROFIT DEBUG] Strategy __init__: profit_check_interval={self.profit_check_interval}s")
+        
         print(',,,,==>',config)
         
         # Dynamic gap adjustment
@@ -235,8 +240,26 @@ class EnhancedSurvivorStrategy(SurvivorStrategy):
         
         result = self.position_manager.reconcile_at_startup()
         
-        # Update local positions dict with reconciled SL order IDs
+        # Populate self.positions from PositionManager for profit target tracking
+        initialized_count = 0
+        updated_count = 0
         for pos_id, pos_state in self.position_manager.get_all_positions().items():
+            # Extract option type from symbol (e.g., NIFTY24FEB18000CE -> CE)
+            symbol_upper = pos_state.symbol.upper()
+            if "CE" in symbol_upper:
+                option_type = "CE"
+            elif "PE" in symbol_upper:
+                option_type = "PE"
+            else:
+                option_type = "UNKNOWN"
+            
+            # Calculate profit target price if enabled
+            profit_target_price = 0.0
+            if self.profit_target_enabled:
+                profit_target_price = pos_state.average_price * (1 - self.profit_target_percent / 100)
+                tick_size = 0.05
+                profit_target_price = round(profit_target_price / tick_size) * tick_size
+            
             if pos_state.symbol in self.positions:
                 # Update existing position with SL info from reconciliation
                 self.positions[pos_state.symbol].sl_order_id = pos_state.sl_order_id
@@ -246,6 +269,35 @@ class EnhancedSurvivorStrategy(SurvivorStrategy):
                     f"Updated position {pos_state.symbol} with reconciled SL: "
                     f"{pos_state.sl_order_id}"
                 )
+                updated_count += 1
+            else:
+                # Create new PositionInfo for position loaded from broker/state
+                self.positions[pos_state.symbol] = PositionInfo(
+                    symbol=pos_state.symbol,
+                    entry_price=pos_state.average_price,
+                    entry_time=datetime.now(),  # Use current time as fallback
+                    quantity=abs(pos_state.quantity),
+                    option_type=option_type,
+                    sl_order_id=pos_state.sl_order_id,
+                    sl_price=pos_state.sl_trigger_price,
+                    sl_limit_price=pos_state.sl_limit_price,
+                    profit_target_price=profit_target_price
+                )
+                logger.info(
+                    f"Initialized position from broker: {pos_state.symbol}, "
+                    f"qty={abs(pos_state.quantity)}, entry=₹{pos_state.average_price:.2f}, "
+                    f"SL=₹{pos_state.sl_trigger_price:.2f}, PT=₹{profit_target_price:.2f}"
+                )
+                initialized_count += 1
+        
+        # Log position initialization summary
+        if initialized_count > 0 or updated_count > 0:
+            logger.info("=" * 60)
+            logger.info("POSITION INITIALIZATION SUMMARY")
+            logger.info(f"  New positions initialized: {initialized_count}")
+            logger.info(f"  Existing positions updated: {updated_count}")
+            logger.info(f"  Total positions now tracked: {len(self.positions)}")
+            logger.info("=" * 60)
         
         # Log reconciliation summary
         logger.info("=" * 60)
@@ -259,6 +311,151 @@ class EnhancedSurvivorStrategy(SurvivorStrategy):
         logger.info("=" * 60)
         
         return result
+    
+    def initialize_positions_from_broker(self) -> int:
+        """
+        Initialize self.positions from actual broker positions.
+        
+        This runs independently of SL reconciliation and is needed because:
+        1. PositionManager is only created when sl_enabled=True
+        2. Profit booking needs positions to be tracked even when SL is disabled
+        3. Uses live broker data instead of state file (more accurate)
+        
+        Returns:
+            Number of positions initialized
+        """
+        logger.critical("=" * 60)
+        logger.critical("INITIALIZING POSITIONS FROM BROKER - METHOD ENTERED")
+        logger.critical("=" * 60)
+        
+        try:
+            # Fetch positions from broker
+            logger.debug(f"[PROFIT DEBUG] initialize_positions_from_broker: Fetching positions from broker...")
+            broker_positions = self.broker.get_positions()
+            logger.info(f"Fetched {len(broker_positions)} positions from broker")
+            logger.debug(f"[PROFIT DEBUG] Broker positions type: {type(broker_positions)}")
+            if broker_positions:
+                logger.debug(f"[PROFIT DEBUG] First position type: {type(broker_positions[0]) if isinstance(broker_positions, list) else type(list(broker_positions.values())[0]) if isinstance(broker_positions, dict) else 'N/A'}")
+            
+            # Fetch open orders to check for existing SL protection
+            orderbook = self.broker.get_orderbook()
+            open_orders = []
+            for order in orderbook:
+                status = order.get('status', '').upper()
+                if status in ('OPEN', 'PENDING', 'AMO REQ RECEIVED', 'PUT ORDER REQ RECEIVED', 
+                             'VALIDATION PENDING', 'OPEN PENDING', 'MODIFY PENDING'):
+                    open_orders.append(order)
+            logger.info(f"Fetched {len(open_orders)} open orders from broker")
+            
+            initialized_count = 0
+            
+            for position in broker_positions:
+                logger.debug(f"[PROFIT DEBUG] Processing broker position: {getattr(position, 'symbol', 'N/A')}, qty={getattr(position, 'quantity_total', 'N/A')}")
+                
+                # Only process short NFO MARGIN positions (Survivor strategy sells options)
+                exchange_val = getattr(getattr(position, 'exchange', None), 'value', getattr(position, 'exchange', None))
+                product_val = getattr(getattr(position, 'product_type', None), 'value', getattr(position, 'product_type', None))
+                qty = getattr(position, 'quantity_total', 0)
+                
+                logger.debug(f"[PROFIT DEBUG] Position check: qty={qty} (< 0? {qty < 0}), exchange={exchange_val}, product={product_val}")
+                
+                if not (qty < 0 and exchange_val == 'NFO' and product_val == 'MARGIN'):
+                    logger.debug(f"[PROFIT DEBUG] Position filtered out - not a short NFO MARGIN position")
+                    continue
+                
+                symbol = position.symbol
+                
+                # Skip if already in positions (from reconcile_sl_at_startup)
+                if symbol in self.positions:
+                    logger.debug(f"Position {symbol} already tracked, skipping")
+                    continue
+                
+                # Extract option type from symbol
+                symbol_upper = symbol.upper()
+                if "CE" in symbol_upper:
+                    option_type = "CE"
+                elif "PE" in symbol_upper:
+                    option_type = "PE"
+                else:
+                    option_type = "UNKNOWN"
+                
+                # Get position data
+                entry_price = position.average_price
+                quantity = abs(position.quantity_total)
+                
+                # Check if SL order exists in open orders (BUY order for same symbol)
+                sl_order_id = None
+                sl_trigger_price = 0.0
+                sl_limit_price = 0.0
+                
+                logger.debug(f"[SL INIT DEBUG] Checking {len(open_orders)} open orders for SL order matching {symbol}")
+                for order in open_orders:
+                    order_symbol = order.get('tradingsymbol')
+                    order_txn_type = order.get('transaction_type', '').upper()
+                    logger.debug(f"[SL INIT DEBUG] Checking order: symbol={order_symbol}, txn_type={order_txn_type}")
+                    
+                    if (order_symbol == symbol and order_txn_type == 'BUY'):
+                        sl_order_id = order.get('order_id')
+                        sl_trigger_price = float(order.get('trigger_price', 0) or 0)
+                        sl_limit_price = float(order.get('price', 0) or 0)
+                        logger.info(f"[SL INIT] Found existing SL order for {symbol}: {sl_order_id}, trigger=₹{sl_trigger_price:.2f}")
+                        break
+                
+                if not sl_order_id:
+                    logger.debug(f"[SL INIT DEBUG] No SL order found for {symbol} in open orders")
+                
+                # Calculate profit target price
+                profit_target_price = 0.0
+                if self.profit_target_enabled:
+                    profit_target_price = entry_price * (1 - self.profit_target_percent / 100)
+                    tick_size = 0.05
+                    profit_target_price = round(profit_target_price / tick_size) * tick_size
+                
+                # Calculate SL prices if not found in open orders
+                if not sl_order_id and self.sl_enabled:
+                    sl_trigger_price = entry_price * (1 + self.sl_percentage / 100)
+                    tick_size = 0.05
+                    sl_trigger_price = round(sl_trigger_price / tick_size) * tick_size
+                    sl_limit_price = sl_trigger_price
+                
+                # Create PositionInfo
+                logger.debug(f"[PROFIT DEBUG] Creating PositionInfo for {symbol}: entry=₹{entry_price:.2f}, profit_target_price=₹{profit_target_price:.2f}")
+                
+                self.positions[symbol] = PositionInfo(
+                    symbol=symbol,
+                    entry_price=entry_price,
+                    entry_time=datetime.now(),
+                    quantity=quantity,
+                    option_type=option_type,
+                    sl_order_id=sl_order_id,
+                    sl_price=sl_trigger_price,
+                    sl_limit_price=sl_limit_price,
+                    profit_target_price=profit_target_price
+                )
+                
+                initialized_count += 1
+                logger.info(
+                    f"Initialized position from broker: {symbol}, "
+                    f"qty={quantity}, entry=₹{entry_price:.2f}, "
+                    f"SL={'Yes' if sl_order_id else 'No'}, PT=₹{profit_target_price:.2f}"
+                )
+                
+                # Verify PositionInfo was created with correct sl_order_id
+                created_position = self.positions.get(symbol)
+                if created_position:
+                    logger.debug(f"[SL INIT DEBUG] Verified PositionInfo for {symbol}: sl_order_id={created_position.sl_order_id}")
+            
+            logger.info("=" * 60)
+            logger.info("POSITION INITIALIZATION FROM BROKER COMPLETE")
+            logger.info(f"  Positions initialized: {initialized_count}")
+            logger.info(f"  Total positions tracked: {len(self.positions)}")
+            logger.info("=" * 60)
+            
+            return initialized_count
+            
+        except Exception as e:
+            logger.error(f"Error initializing positions from broker: {e}", exc_info=True)
+            return 0
     
     def _load_historical_data(self):
         """Load historical data for technical indicators"""
@@ -554,14 +751,23 @@ class EnhancedSurvivorStrategy(SurvivorStrategy):
         Returns:
             List of tuples (symbol, position, profit_percent) for positions that hit target
         """
+        # DEBUG: Log entry and config state
+        logger.debug(f"[PROFIT DEBUG] _check_profit_targets called")
+        logger.debug(f"[PROFIT DEBUG] profit_target_enabled={self.profit_target_enabled}")
+        logger.debug(f"[PROFIT DEBUG] positions count={len(self.positions)}")
+        
         if not self.profit_target_enabled:
+            logger.debug(f"[PROFIT DEBUG] Profit target disabled, returning early")
             return []
             
         # Check if enough time has passed since last profit check
         current_time = datetime.now()
         time_since_last_check = (current_time - self.last_profit_check_time).total_seconds()
         
+        logger.debug(f"[PROFIT DEBUG] time_since_last_check={time_since_last_check}s, interval={self.profit_check_interval}s")
+        
         if time_since_last_check < self.profit_check_interval:
+            logger.debug(f"[PROFIT DEBUG] Interval not reached yet, skipping check")
             return []
             
         # Update last check time
@@ -569,24 +775,37 @@ class EnhancedSurvivorStrategy(SurvivorStrategy):
         
         positions_to_exit = []
         
+        logger.debug(f"[PROFIT DEBUG] Checking {len(self.positions)} positions for profit targets")
+        
         for symbol, position in self.positions.items():
             try:
+                logger.debug(f"[PROFIT DEBUG] Checking position {symbol}: entry=₹{position.entry_price:.2f}, profit_target_price=₹{position.profit_target_price:.2f}")
+                
                 quote = self.broker.get_quote(f"NFO:{symbol}")
                 current_price = quote.last_price
                 
+                logger.debug(f"[PROFIT DEBUG] {symbol} current_price=₹{current_price:.2f}")
+                
                 # Check profit target
-                if position.profit_target_price > 0 and current_price <= position.profit_target_price:
+                if position.profit_target_price > 0:
                     profit_percent = (position.entry_price - current_price) / position.entry_price * 100
-                    logger.info(
-                        f"PROFIT TARGET HIT for {symbol}: "
-                        f"entry=₹{position.entry_price:.2f}, current=₹{current_price:.2f}, "
-                        f"target=₹{position.profit_target_price:.2f} ({profit_percent:.1f}% profit, "
-                        f"configured: {self.profit_target_percent}%)"
-                    )
-                    positions_to_exit.append((symbol, position, "PROFIT_TARGET"))
+                    logger.debug(f"[PROFIT DEBUG] {symbol} profit_percent={profit_percent:.2f}%, target={self.profit_target_percent}%")
+                    
+                    if current_price <= position.profit_target_price:
+                        logger.info(
+                            f"PROFIT TARGET HIT for {symbol}: "
+                            f"entry=₹{position.entry_price:.2f}, current=₹{current_price:.2f}, "
+                            f"target=₹{position.profit_target_price:.2f} ({profit_percent:.1f}% profit, "
+                            f"configured: {self.profit_target_percent}%)"
+                        )
+                        positions_to_exit.append((symbol, position, "PROFIT_TARGET"))
+                    else:
+                        logger.debug(f"[PROFIT DEBUG] {symbol} profit target NOT hit (current ₹{current_price:.2f} > target ₹{position.profit_target_price:.2f})")
+                else:
+                    logger.debug(f"[PROFIT DEBUG] {symbol} has no profit_target_price set (value: {position.profit_target_price})")
                     
             except Exception as e:
-                logger.error(f"Error checking profit target for {symbol}: {e}")
+                logger.error(f"[PROFIT DEBUG] Error checking profit target for {symbol}: {e}", exc_info=True)
                 
         # Exit positions that hit profit target
         for symbol, position, reason in positions_to_exit:
@@ -610,6 +829,9 @@ class EnhancedSurvivorStrategy(SurvivorStrategy):
         Returns:
             List of tuples (symbol, position, profit_percent) for positions that hit target
         """
+        logger.debug(f"[PROFIT DEBUG] check_profit_targets_at_startup called")
+        logger.debug(f"[PROFIT DEBUG] profit_target_enabled={self.profit_target_enabled}, positions count={len(self.positions)}")
+        
         if not self.profit_target_enabled:
             logger.info("Profit target is disabled, skipping startup profit check")
             return []
@@ -811,27 +1033,40 @@ class EnhancedSurvivorStrategy(SurvivorStrategy):
         Returns:
             True if cancelled successfully, False otherwise
         """
+        logger.debug(f"[SL CANCEL DEBUG] _cancel_sl_order called for {symbol}, sl_order_id={sl_order_id}")
+        
         if not sl_order_id:
+            logger.debug(f"[SL CANCEL DEBUG] No sl_order_id provided for {symbol}, skipping cancel")
             return True
             
         try:
+            logger.debug(f"[SL CANCEL DEBUG] Calling broker.cancel_order({sl_order_id}) for {symbol}")
             order_resp = self.broker.cancel_order(sl_order_id)
+            logger.debug(f"[SL CANCEL DEBUG] cancel_order response: status={order_resp.status}, message={getattr(order_resp, 'message', 'N/A')}")
+            
             if order_resp.status == "ok":
-                logger.info(f"SL order {sl_order_id} cancelled for {symbol}")
+                logger.info(f"[SL CANCEL] SL order {sl_order_id} cancelled successfully for {symbol}")
                 return True
             else:
-                logger.warning(f"Failed to cancel SL order {sl_order_id} for {symbol}: {order_resp.message}")
+                logger.warning(f"[SL CANCEL] Failed to cancel SL order {sl_order_id} for {symbol}: {order_resp.message}")
                 return False
         except Exception as e:
-            logger.error(f"Error cancelling SL order {sl_order_id} for {symbol}: {e}")
+            logger.error(f"[SL CANCEL] Error cancelling SL order {sl_order_id} for {symbol}: {e}", exc_info=True)
             return False
     
     def _exit_position(self, symbol: str, position: PositionInfo):
         """Exit a position by buying back the option"""
+        logger.debug(f"[EXIT DEBUG] _exit_position called for {symbol}")
+        logger.debug(f"[EXIT DEBUG] Position info: qty={position.quantity}, entry=₹{position.entry_price:.2f}, sl_order_id={position.sl_order_id}, pnl=₹{position.current_pnl:.2f}")
+        
         try:
             # First, cancel any existing SL order for this position
             if position.sl_order_id:
-                self._cancel_sl_order(position.sl_order_id, symbol)
+                logger.debug(f"[EXIT DEBUG] Position has sl_order_id={position.sl_order_id}, calling _cancel_sl_order")
+                cancel_result = self._cancel_sl_order(position.sl_order_id, symbol)
+                logger.debug(f"[EXIT DEBUG] _cancel_sl_order returned: {cancel_result}")
+            else:
+                logger.debug(f"[EXIT DEBUG] Position has no sl_order_id, skipping SL cancellation")
             
             # Place buy order to close short position
             req = OrderRequest(
@@ -964,10 +1199,15 @@ class EnhancedSurvivorStrategy(SurvivorStrategy):
             self._check_stop_losses()
             
         # Check profit targets on configured interval (default: every 5 minutes)
-        print("====================s==",  self.positions , self.profit_target_enabled)
+        logger.debug(f"[PROFIT DEBUG] on_ticks_update: positions={len(self.positions)}, profit_target_enabled={self.profit_target_enabled}")
         if self.positions and self.profit_target_enabled:
-            print("========g=======fg=======")
+            logger.debug(f"[PROFIT DEBUG] Calling _check_profit_targets from on_ticks_update")
             self._check_profit_targets()
+        else:
+            if not self.positions:
+                logger.debug(f"[PROFIT DEBUG] Skipping profit check: no positions")
+            if not self.profit_target_enabled:
+                logger.debug(f"[PROFIT DEBUG] Skipping profit check: profit_target_enabled=False")
             
         # Check daily loss limit
         if self._check_daily_loss_limit():
@@ -1159,7 +1399,7 @@ class EnhancedSurvivorStrategy(SurvivorStrategy):
             logger.info(f"SL Percentage: {self.sl_percentage}%")
             logger.info(f"SL Trigger Price: ₹{trigger_price:.2f}")
             logger.info(f"SL Limit Price: ₹{limit_price:.2f}")
-            logger.info(f"SL Order Type: {self.sl_order_type.value}")
+            logger.info(f"SL Order Type: {self.sl_order_type_str}")
             logger.info("=" * 60)
             
             # Step 1: Place fresh order (SELL for short options)
@@ -1431,6 +1671,9 @@ if __name__ == "__main__":
     # ==========================================================================
     
     # Run SL reconciliation to protect existing positions
+    logger.info("=" * 60)
+    logger.info("SECTION 5: SL RECONCILIATION")
+    logger.info("=" * 60)
     reconciliation_result = strategy.reconcile_sl_at_startup()
     
     if reconciliation_result:
@@ -1438,21 +1681,68 @@ if __name__ == "__main__":
         logger.info(f"  - Total positions: {reconciliation_result.total_positions}")
         logger.info(f"  - New SL orders placed: {reconciliation_result.new_sl_placed}")
         logger.info(f"  - Errors: {len(reconciliation_result.errors)}")
+    else:
+        logger.info("SL Reconciliation returned None (PositionManager not initialized or sl_enabled=False)")
     
     # ==========================================================================
-    # SECTION 6: PROFIT TARGET CHECK AT STARTUP
+    # SECTION 6: POSITION INITIALIZATION FROM BROKER
     # ==========================================================================
+    
+    logger.info("=" * 60)
+    logger.info("SECTION 6: POSITION INITIALIZATION FROM BROKER")
+    logger.info("=" * 60)
+    logger.info(f"[PROFIT DEBUG] Before init: positions count={len(strategy.positions)}")
+    
+    # Initialize positions from actual broker (independent of SL reconciliation)
+    # This is needed because PositionManager is only created when sl_enabled=True
+    # But profit booking needs positions to be tracked even when SL is disabled
+    initialized_count = 0
+    try:
+        initialized_count = strategy.initialize_positions_from_broker()
+        logger.info(f"[PROFIT DEBUG] initialize_positions_from_broker() returned: {initialized_count}")
+    except Exception as e:
+        logger.error(f"[PROFIT DEBUG] ERROR in initialize_positions_from_broker: {e}", exc_info=True)
+    
+    logger.debug(f"[PROFIT DEBUG] After initialize_positions_from_broker: initialized_count={initialized_count}, positions count={len(strategy.positions)}")
+    
+    if initialized_count > 0:
+        logger.info(f"Position Initialization Result:")
+        logger.info(f"  - Positions initialized from broker: {initialized_count}")
+    else:
+        logger.info("No positions were initialized from broker")
+    
+    # Log positions for debugging
+    logger.info(f"[PROFIT DEBUG] After init: total positions tracked={len(strategy.positions)}")
+    if strategy.positions:
+        logger.info(f"[PROFIT DEBUG] Current positions after initialization:")
+        for symbol, pos in strategy.positions.items():
+            logger.info(f"[PROFIT DEBUG]   {symbol}: entry=₹{pos.entry_price:.2f}, PT_price=₹{pos.profit_target_price:.2f}")
+    else:
+        logger.warning(f"[PROFIT DEBUG] WARNING: No positions in strategy.positions after initialization!")
+    
+    # ==========================================================================
+    # SECTION 7: PROFIT TARGET CHECK AT STARTUP
+    # ==========================================================================
+    
+    logger.info("=" * 60)
+    logger.info("SECTION 7: PROFIT TARGET CHECK AT STARTUP")
+    logger.info("=" * 60)
     
     # Check if any existing positions have already hit their profit target
     # This handles cases where the strategy was offline and positions became profitable
-    profit_check_result = strategy.check_profit_targets_at_startup()
+    logger.info(f"[PROFIT DEBUG] About to call check_profit_targets_at_startup...")
+    profit_check_result = None
+    try:
+        profit_check_result = strategy.check_profit_targets_at_startup()
+    except Exception as e:
+        logger.error(f"[PROFIT DEBUG] ERROR in check_profit_targets_at_startup: {e}", exc_info=True)
     
     if profit_check_result:
         logger.info(f"Startup Profit Check Result:")
         logger.info(f"  - Positions exited: {len(profit_check_result)}")
     
     # ==========================================================================
-    # SECTION 7: MAIN TRADING LOOP
+    # SECTION 8: MAIN TRADING LOOP
     # ==========================================================================
     
     logger.info("=" * 80)

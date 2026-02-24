@@ -73,20 +73,20 @@ async def start_strategy(request: StrategyStartRequest = None):
         print(f"[Strategy] Pre-flight broker check warning: {e}")
     
     config_override = request.config_override if request else None
-    success = strategy_manager.start(config_override)
+    result = strategy_manager.start(config_override=config_override, confirmed=True)
     
     # Get updated state (might contain error message)
     updated_state = strategy_manager.get_state()
     
-    if success:
+    if result.get("success"):
         return StrategyStartResponse(
             success=True,
-            message="Strategy started successfully",
+            message=result.get("message", "Strategy started successfully"),
             status=StrategyStatus.RUNNING
         )
     else:
         # Include error message if available
-        error_msg = updated_state.error_message or "Failed to start strategy"
+        error_msg = result.get("message") or updated_state.error_message or "Failed to start strategy"
         return StrategyStartResponse(
             success=False,
             message=error_msg,
@@ -111,18 +111,18 @@ async def stop_strategy():
             status=StrategyStatus.STOPPED
         )
     
-    success = strategy_manager.stop()
+    result = strategy_manager.stop()
     
-    if success:
+    if result.get("success"):
         return StrategyStopResponse(
             success=True,
-            message="Strategy stopped successfully",
+            message=result.get("message", "Strategy stopped successfully"),
             status=StrategyStatus.STOPPED
         )
     else:
         return StrategyStopResponse(
             success=False,
-            message="Failed to stop strategy",
+            message=result.get("message", "Failed to stop strategy"),
             status=strategy_manager.get_state().status
         )
 
@@ -139,17 +139,17 @@ async def restart_strategy(request: StrategyStartRequest = None):
         StrategyStartResponse: Result of restart operation
     """
     config_override = request.config_override if request else None
-    success = strategy_manager.restart(config_override)
+    result = strategy_manager.restart(config_override=config_override, confirmed=True)
     
-    if success:
+    if result.get("success"):
         return StrategyStartResponse(
             success=True,
-            message="Strategy restarted successfully",
+            message=result.get("message", "Strategy restarted successfully"),
             status=StrategyStatus.RUNNING
         )
     else:
         return StrategyStartResponse(
             success=False,
-            message="Failed to restart strategy",
+            message=result.get("message", "Failed to restart strategy"),
             status=strategy_manager.get_state().status
         )

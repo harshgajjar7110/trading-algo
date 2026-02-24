@@ -1,5 +1,1 @@
-{
-  "mcpServers": {
-   
-  }
-}
+{"mcpServers":{"memory":{"command":"npx","args":["-y","@modelcontextprotocol/server-memory"],"env":{"MEMORY_FILE_PATH":"C:/Users/harsh/Documents/hobby-project/trading-algo/memory.json"},"alwaysAllow":["create_entities","create_relations","add_observations","delete_entities","delete_observations","delete_relations","read_graph","search_nodes","open_nodes"],"timeout":15,"disabled":true}}}

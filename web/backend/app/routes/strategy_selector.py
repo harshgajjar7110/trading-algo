@@ -11,7 +11,7 @@ from typing import Dict, Optional, Any
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
-from app.services.strategy_manager_v2 import strategy_manager_v2
+from app.services.strategy_manager import strategy_manager
 from app.services.strategy_registry import StrategyRegistry
 
 router = APIRouter(prefix="/strategy", tags=["strategy-selector"])
@@ -51,7 +51,7 @@ async def get_available_strategies():
     Returns strategies with risk levels, recommended capital, and descriptions
     to help users choose which strategy to run.
     """
-    return strategy_manager_v2.get_available_strategies()
+    return strategy_manager.get_available_strategies()
 
 
 @router.get("/{strategy_id}/details")
@@ -61,7 +61,7 @@ async def get_strategy_details(strategy_id: str):
     
     Includes full description, default parameters, and current configuration.
     """
-    details = strategy_manager_v2.get_strategy_details(strategy_id)
+    details = strategy_manager.get_strategy_details(strategy_id)
     if not details:
         raise HTTPException(status_code=404, detail=f"Strategy not found: {strategy_id}")
     return details
@@ -80,7 +80,7 @@ async def preview_strategy_config(request: StrategyConfigPreviewRequest):
     
     Use this before starting to confirm parameters.
     """
-    preview = strategy_manager_v2.preview_strategy_config(
+    preview = strategy_manager.preview_strategy_config(
         request.strategy_id,
         request.config_override
     )
@@ -101,7 +101,7 @@ async def start_strategy(request: StrategyStartRequest):
     
     If 'confirmed' is True, starts the strategy with the given configuration.
     """
-    result = strategy_manager_v2.start(
+    result = strategy_manager.start(
         strategy_id=request.strategy_id,
         config_override=request.config_override,
         confirmed=request.confirmed
@@ -120,7 +120,7 @@ async def start_strategy(request: StrategyStartRequest):
 @router.post("/stop")
 async def stop_strategy():
     """Stop the currently running strategy"""
-    result = strategy_manager_v2.stop()
+    result = strategy_manager.stop()
     
     if not result.get("success"):
         raise HTTPException(status_code=400, detail=result.get("message"))
@@ -131,7 +131,7 @@ async def stop_strategy():
 @router.post("/restart")
 async def restart_strategy(request: StrategyStartRequest):
     """Restart the strategy (stop then start)"""
-    result = strategy_manager_v2.restart(
+    result = strategy_manager.restart(
         strategy_id=request.strategy_id,
         config_override=request.config_override,
         confirmed=request.confirmed
@@ -153,7 +153,7 @@ async def get_current_strategy():
     
     Returns None if no strategy is running.
     """
-    info = strategy_manager_v2.get_current_strategy_info()
+    info = strategy_manager.get_current_strategy_info()
     
     if not info:
         return {
@@ -212,8 +212,8 @@ async def get_strategy_status():
     
     This is the main endpoint for the dashboard to poll for status.
     """
-    state = strategy_manager_v2.get_state()
-    current = strategy_manager_v2.get_current_strategy_info()
+    state = strategy_manager.get_state()
+    current = strategy_manager.get_current_strategy_info()
     
     return {
         "state": state,

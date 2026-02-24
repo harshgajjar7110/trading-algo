@@ -138,13 +138,13 @@ class StrategyConfigUpdate(BaseModel):
     sl_order_type: Optional[str] = None
     sl_limit_buffer: Optional[float] = None
     sl_reconcile_on_start: Optional[bool] = None
-    sl_state_file: Optional[str] = None
 
     # ============================================================
     # ENHANCED: Profit Target Settings
     # ============================================================
     profit_target_enabled: Optional[bool] = None
     profit_target_percent: Optional[int] = None
+    profit_check_interval: Optional[int] = None
 
     # ============================================================
     # ENHANCED: Legacy Stop-Loss
@@ -179,6 +179,16 @@ class StrategyConfigUpdate(BaseModel):
     # ============================================================
     volatility_sizing: Optional[bool] = None
     high_vol_size_reduction: Optional[float] = None
+
+    # ============================================================
+    # ENHANCED: Position Initialization
+    # ============================================================
+    enable_position_init: Optional[bool] = None
+
+    # ============================================================
+    # ENHANCED: Logging
+    # ============================================================
+    log_tick_data: Optional[bool] = None
 
 
 class ConfigValidationResponse(BaseModel):

@@ -26,8 +26,8 @@ class Settings(BaseSettings):
     # Broker settings (inherited from main project)
     BROKER_NAME: str = "zerodha"
     
-    # Strategy config path - Using enhanced strategy config
-    STRATEGY_CONFIG_PATH: str = str(Path(__file__).parent.parent.parent.parent / "strategy" / "configs" / "survivor_enhanced.yml")
+    # Strategy config path
+    STRATEGY_CONFIG_PATH: str = str(Path(__file__).parent.parent.parent.parent / "strategy" / "configs" / "survivor.yml")
     
     # WebSocket
     WS_HEARTBEAT_INTERVAL: int = 30  # seconds
@@ -108,7 +108,7 @@ class StrategyConfig(BaseModel):
     sl_order_type: str = "STOP_LIMIT"
     sl_limit_buffer: float = 0.05
     sl_reconcile_on_start: bool = True
-    sl_state_file: str = "artifacts/survivor_enhanced_position_state.json"
+    sl_state_file: str = "artifacts/survivor_position_state.json"
 
     # ============================================================
     # ENHANCED: Profit Target Settings
@@ -161,6 +161,11 @@ class StrategyConfig(BaseModel):
     # ============================================================
     volatility_sizing: bool = True
     high_vol_size_reduction: float = 0.5
+
+    # ============================================================
+    # ENHANCED: Position Initialization
+    # ============================================================
+    enable_position_init: bool = False
 
     class Config:
         extra = "ignore"

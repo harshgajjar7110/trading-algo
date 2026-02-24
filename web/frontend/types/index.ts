@@ -125,13 +125,13 @@ export interface StrategyConfig {
   sl_order_type: string;
   sl_limit_buffer: number;
   sl_reconcile_on_start: boolean;
-  sl_state_file: string;
 
   // ============================================================
   // ENHANCED: Profit Target Settings
   // ============================================================
   profit_target_enabled: boolean;
   profit_target_percent: number;
+  profit_check_interval: number; // seconds between profit target checks
 
   // ============================================================
   // ENHANCED: Legacy Stop-Loss
@@ -166,6 +166,16 @@ export interface StrategyConfig {
   // ============================================================
   volatility_sizing: boolean;
   high_vol_size_reduction: number;
+
+  // ============================================================
+  // ENHANCED: Position Initialization
+  // ============================================================
+  enable_position_init: boolean;
+
+  // ============================================================
+  // ENHANCED: Logging
+  // ============================================================
+  log_tick_data: boolean;
 }
 
 export interface ConfigValidationResponse {

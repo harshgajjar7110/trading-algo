@@ -17,7 +17,7 @@ def setup_logging():
     # Create a TimedRotatingFileHandler: a new log file every day
     log_file = os.path.join(log_dir, "system.log")
     file_handler = logging.handlers.TimedRotatingFileHandler(
-        log_file, when="midnight", interval=1, backupCount=7
+        log_file, when="midnight", interval=1, backupCount=7, encoding='utf-8'
     )
     file_handler.suffix = "%Y-%m-%d"
 
@@ -34,6 +34,9 @@ def setup_logging():
     enable_console = os.getenv("ENABLE_CONSOLE_LOG", "false").lower() == "true"
     if enable_console:
         console_handler = logging.StreamHandler()
+        # Set UTF-8 encoding for console to handle Unicode characters like ₹
+        if hasattr(console_handler.stream, 'reconfigure'):
+            console_handler.stream.reconfigure(encoding='utf-8')
         console_handler.setLevel(logging.INFO)
         console_formatter = logging.Formatter(
             fmt="%(asctime)s - %(name)s - %(levelname)s - %(filename)s:%(lineno)d - %(funcName)s - PID:%(process)d - %(message)s",
@@ -70,7 +73,7 @@ def setup_strategy_logging():
     # Create a TimedRotatingFileHandler: a new log file every day
     log_file = os.path.join(log_dir, "strategy.log")
     file_handler = logging.handlers.TimedRotatingFileHandler(
-        log_file, when="midnight", interval=1, backupCount=30  # Keep 30 days
+        log_file, when="midnight", interval=1, backupCount=30, encoding='utf-8'  # Keep 30 days
     )
     file_handler.suffix = "%Y-%m-%d"
 
@@ -123,7 +126,7 @@ def setup_strategy_logging_with_name(strategy_name: str = "strategy"):
         strategy_logger.handlers.clear()
 
     # Create file handler (no rotation for instance-specific logs)
-    file_handler = logging.FileHandler(log_file, mode='a')
+    file_handler = logging.FileHandler(log_file, mode='a', encoding='utf-8')
     
     # Define formatter with timestamp
     formatter = logging.Formatter(

@@ -5,161 +5,211 @@ import Link from 'next/link';
 import { StrategyConfig, ConfigValidationResponse } from '@/types';
 import { configAPI } from '@/lib/api';
 
-type ConfigTab = 'base' | 'enhanced';
+// =============================================================================
+// Types
+// =============================================================================
+type ConfigFieldType = 'text' | 'number' | 'select' | 'boolean';
 
 interface ConfigField {
   key: keyof StrategyConfig;
   label: string;
-  type: 'text' | 'number' | 'select';
+  type: ConfigFieldType;
   options?: string[];
   description: string;
+  min?: number;
+  max?: number;
+  step?: number;
 }
 
-interface ConfigGroup {
+interface ConfigCategory {
+  id: string;
   title: string;
+  icon: string;
+  description: string;
   fields: ConfigField[];
 }
 
 // =============================================================================
-// BASE CONFIGURATION GROUPS
+// CONFIGURATION CATEGORIES (15 Enhanced Categories)
 // =============================================================================
-const BASE_CONFIG_GROUPS: ConfigGroup[] = [
+const CONFIG_CATEGORIES: ConfigCategory[] = [
   {
-    title: '📊 Index & Symbol Configuration',
+    id: 'symbol-market',
+    title: 'Symbol & Market Settings',
+    icon: '📊',
+    description: 'Core trading symbol and market configuration',
     fields: [
       { key: 'index_symbol', label: 'Index Symbol', type: 'text', description: 'Underlying index for tracking (e.g., NSE:NIFTY 50)' },
       { key: 'symbol_initials', label: 'Symbol Initials', type: 'text', description: 'Option series identifier (e.g., NIFTY26FEB)' },
+      { key: 'exchange', label: 'Exchange', type: 'select', options: ['NFO', 'BFO', 'MCX'], description: 'Exchange for trading' },
+      { key: 'product_type', label: 'Product Type', type: 'select', options: ['NRML', 'MIS', 'CNC'], description: 'Product type for orders (NRML = overnight, MIS = intraday)' },
+      { key: 'order_type', label: 'Order Type', type: 'select', options: ['MARKET', 'LIMIT'], description: 'Default order type for execution' },
+      { key: 'trans_type', label: 'Transaction Type', type: 'select', options: ['SELL', 'BUY'], description: 'Transaction type for strategy orders (usually SELL for option writing)' },
+      { key: 'tag', label: 'Order Tag', type: 'text', description: 'Tag to identify strategy orders in broker system' },
     ],
   },
   {
-    title: '📈 Gap Parameters (Trade Triggers)',
+    id: 'strike-selection',
+    title: 'Strike Selection',
+    icon: '🎯',
+    description: 'Configure strike price selection based on distance from spot',
     fields: [
-      { key: 'pe_gap', label: 'PE Gap', type: 'number', description: 'NIFTY upward movement threshold to trigger PE sells' },
-      { key: 'ce_gap', label: 'CE Gap', type: 'number', description: 'NIFTY downward movement threshold to trigger CE sells' },
-      { key: 'pe_reset_gap', label: 'PE Reset Gap', type: 'number', description: 'Favorable movement threshold to reset PE reference' },
-      { key: 'ce_reset_gap', label: 'CE Reset Gap', type: 'number', description: 'Favorable movement threshold to reset CE reference' },
+      { key: 'pe_symbol_gap', label: 'PE Strike Distance', type: 'number', description: 'Points below current price for PE strike selection (e.g., 600 = 6 strikes for NIFTY)', min: 0, step: 50 },
+      { key: 'ce_symbol_gap', label: 'CE Strike Distance', type: 'number', description: 'Points above current price for CE strike selection (e.g., 600 = 6 strikes for NIFTY)', min: 0, step: 50 },
     ],
   },
   {
-    title: '🎯 Strike Selection (Distance from Spot)',
+    id: 'reference-points',
+    title: 'Reference Points',
+    icon: '📍',
+    description: 'Starting reference values for price movement tracking',
     fields: [
-      { key: 'pe_symbol_gap', label: 'PE Symbol Gap', type: 'number', description: 'Distance below current price for PE strike selection' },
-      { key: 'ce_symbol_gap', label: 'CE Symbol Gap', type: 'number', description: 'Distance above current price for CE strike selection' },
+      { key: 'pe_start_point', label: 'PE Start Point', type: 'number', description: 'Initial PE reference value (0 = use current market price at strategy start)', min: 0, step: 100 },
+      { key: 'ce_start_point', label: 'CE Start Point', type: 'number', description: 'Initial CE reference value (0 = use current market price at strategy start)', min: 0, step: 100 },
     ],
   },
   {
-    title: '💼 Position Sizing',
+    id: 'price-gaps',
+    title: 'Price Gaps (Movement Thresholds)',
+    icon: '📈',
+    description: 'Price movement thresholds for triggering trades and resets',
     fields: [
-      { key: 'pe_quantity', label: 'PE Quantity', type: 'number', description: 'Base quantity for PE option trades' },
-      { key: 'ce_quantity', label: 'CE Quantity', type: 'number', description: 'Base quantity for CE option trades' },
+      { key: 'pe_gap', label: 'PE Gap (Trigger)', type: 'number', description: 'NIFTY upward movement threshold to trigger PE sells (in points)', min: 1, step: 5 },
+      { key: 'ce_gap', label: 'CE Gap (Trigger)', type: 'number', description: 'NIFTY downward movement threshold to trigger CE sells (in points)', min: 1, step: 5 },
+      { key: 'pe_reset_gap', label: 'PE Reset Gap', type: 'number', description: 'Favorable downward movement to reset PE reference (in points)', min: 1, step: 5 },
+      { key: 'ce_reset_gap', label: 'CE Reset Gap', type: 'number', description: 'Favorable upward movement to reset CE reference (in points)', min: 1, step: 5 },
+      { key: 'sell_multiplier_threshold', label: 'Sell Multiplier Threshold', type: 'number', description: 'Maximum allowed position multiplier for pyramid scaling', min: 1, step: 0.5 },
     ],
   },
   {
-    title: '🛡️ Risk Management',
+    id: 'quantity-settings',
+    title: 'Quantity Settings',
+    icon: '💼',
+    description: 'Base position sizing for each option type',
     fields: [
-      { key: 'min_price_to_sell', label: 'Min Price to Sell', type: 'number', description: 'Minimum option premium threshold for execution' },
-      { key: 'sell_multiplier_threshold', label: 'Sell Multiplier Threshold', type: 'number', description: 'Maximum allowed position multiplier' },
+      { key: 'pe_quantity', label: 'PE Quantity', type: 'number', description: 'Base quantity for PE (Put) option trades', min: 1, step: 1 },
+      { key: 'ce_quantity', label: 'CE Quantity', type: 'number', description: 'Base quantity for CE (Call) option trades', min: 1, step: 1 },
     ],
   },
   {
-    title: '📍 Reference Points (Starting Values)',
+    id: 'entry-filters',
+    title: 'Entry Filters',
+    icon: '🚦',
+    description: 'Filters to control when trades can be entered',
     fields: [
-      { key: 'pe_start_point', label: 'PE Start Point', type: 'number', description: 'Initial PE reference value (0 = current market price)' },
-      { key: 'ce_start_point', label: 'CE Start Point', type: 'number', description: 'Initial CE reference value (0 = current market price)' },
+      { key: 'entry_filter_type', label: 'Entry Filter Type', type: 'select', options: ['NONE', 'RSI', 'EMA', 'ADX', 'ALL'], description: 'Type of entry filter to use (NONE = no filters, ALL = all filters must pass)' },
+      { key: 'min_price_to_sell', label: 'Min Premium to Sell', type: 'number', description: 'Minimum option premium threshold for execution (filters out low-premium trades)', min: 1, step: 1 },
+      { key: 'history_period_days', label: 'History Period (Days)', type: 'number', description: 'Days of historical data to load for indicator calculations', min: 1, max: 30, step: 1 },
     ],
   },
   {
-    title: '⚙️ Order Settings',
+    id: 'technical-indicators',
+    title: 'Technical Indicators',
+    icon: '📉',
+    description: 'RSI, EMA, ADX, and ATR indicator settings',
     fields: [
-      { key: 'exchange', label: 'Exchange', type: 'select', options: ['NFO'], description: 'Exchange for trading' },
-      { key: 'order_type', label: 'Order Type', type: 'select', options: ['MARKET', 'LIMIT'], description: 'Order type for execution' },
-      { key: 'product_type', label: 'Product Type', type: 'select', options: ['NRML', 'MIS'], description: 'Product type for orders' },
-      { key: 'trans_type', label: 'Transaction Type', type: 'select', options: ['BUY', 'SELL'], description: 'Transaction type for all orders' },
+      { key: 'rsi_period', label: 'RSI Period', type: 'number', description: 'RSI calculation period (typically 14)', min: 2, max: 50, step: 1 },
+      { key: 'rsi_min', label: 'RSI Minimum', type: 'number', description: 'Minimum RSI for entry - blocks CE sells when RSI < min (oversold)', min: 0, max: 100, step: 5 },
+      { key: 'rsi_max', label: 'RSI Maximum', type: 'number', description: 'Maximum RSI for entry - blocks PE sells when RSI > max (overbought)', min: 0, max: 100, step: 5 },
+      { key: 'ema_period', label: 'EMA Period', type: 'number', description: 'EMA period for trend detection filter', min: 5, max: 200, step: 5 },
+      { key: 'adx_period', label: 'ADX Period', type: 'number', description: 'ADX calculation period for trend strength measurement', min: 5, max: 50, step: 1 },
+      { key: 'adx_threshold', label: 'ADX Threshold', type: 'number', description: 'Minimum ADX value to confirm strong trend (typically 25)', min: 10, max: 50, step: 5 },
+      { key: 'atr_period', label: 'ATR Period', type: 'number', description: 'ATR period for volatility measurement', min: 5, max: 50, step: 1 },
+      { key: 'atr_history_days', label: 'ATR History Days', type: 'number', description: 'Days of history to load for ATR calculations', min: 1, max: 10, step: 1 },
+    ],
+  },
+  {
+    id: 'position-limits',
+    title: 'Position Limits',
+    icon: '🛡️',
+    description: 'Maximum position constraints for risk management',
+    fields: [
+      { key: 'max_positions_per_side', label: 'Max Positions Per Side', type: 'number', description: 'Maximum PE or CE positions separately (e.g., 3 = max 3 PE and 3 CE)', min: 1, max: 10, step: 1 },
+      { key: 'max_total_positions', label: 'Max Total Positions', type: 'number', description: 'Maximum combined positions (PE + CE) across both sides', min: 1, max: 20, step: 1 },
+      { key: 'max_consecutive_losses', label: 'Max Consecutive Losses', type: 'number', description: 'Pause trading after N consecutive losses (risk circuit breaker)', min: 1, max: 10, step: 1 },
+    ],
+  },
+  {
+    id: 'volatility-sizing',
+    title: 'Volatility-Based Sizing',
+    icon: '📊',
+    description: 'Dynamic position sizing based on market volatility',
+    fields: [
+      { key: 'volatility_sizing', label: 'Enable Volatility Sizing', type: 'boolean', description: 'Enable automatic position size reduction in high volatility periods' },
+      { key: 'high_vol_size_reduction', label: 'High Vol Reduction', type: 'number', description: 'Trade at X% of normal size in high volatility (0.5 = 50% size)', min: 0.1, max: 1, step: 0.1 },
+      { key: 'enable_dynamic_gaps', label: 'Enable Dynamic Gaps', type: 'boolean', description: 'Enable ATR-based dynamic gap adjustment for adaptive thresholds' },
+      { key: 'atr_multiplier_pe', label: 'ATR Multiplier PE', type: 'number', description: 'ATR multiplier for PE gap calculation when dynamic gaps enabled', min: 0.5, max: 20, step: 0.5 },
+      { key: 'atr_multiplier_ce', label: 'ATR Multiplier CE', type: 'number', description: 'ATR multiplier for CE gap calculation when dynamic gaps enabled', min: 0.5, max: 20, step: 0.5 },
+    ],
+  },
+  {
+    id: 'profit-target',
+    title: 'Profit Target Settings',
+    icon: '💰',
+    description: 'Automatic profit taking configuration',
+    fields: [
+      { key: 'profit_target_enabled', label: 'Enable Profit Target', type: 'boolean', description: 'Enable automatic profit target exits' },
+      { key: 'profit_target_percent', label: 'Profit Target %', type: 'number', description: 'Exit when X% of premium collected is retained as profit', min: 10, max: 90, step: 5 },
+      { key: 'profit_check_interval', label: 'Check Interval (sec)', type: 'number', description: 'Seconds between profit target evaluation checks', min: 5, max: 300, step: 5 },
+    ],
+  },
+  {
+    id: 'stop-loss',
+    title: 'Stop-Loss Settings',
+    icon: '🛑',
+    description: 'Automated stop-loss order configuration',
+    fields: [
+      { key: 'sl_enabled', label: 'Enable Stop-Loss Orders', type: 'boolean', description: 'Enable automatic SL order placement with broker' },
+      { key: 'sl_percentage', label: 'SL Percentage', type: 'number', description: 'SL at % of entry price (for shorts: entry × (1 + sl%/100))', min: 10, max: 200, step: 5 },
+      { key: 'sl_order_type', label: 'SL Order Type', type: 'select', options: ['STOP', 'STOP_LIMIT'], description: 'STOP (SL-M) triggers at market, STOP_LIMIT (SL) places limit order' },
+      { key: 'sl_limit_buffer', label: 'SL Limit Buffer', type: 'number', description: 'Points buffer for limit price (for SL orders)', min: 0, max: 1, step: 0.05 },
+      { key: 'sl_reconcile_on_start', label: 'Reconcile on Start', type: 'boolean', description: 'Run SL reconciliation at algo startup to sync with broker' },
+    ],
+  },
+  {
+    id: 'trailing-stop',
+    title: 'Trailing Stop Settings',
+    icon: '🔄',
+    description: 'Trailing stop-loss for protecting profits',
+    fields: [
+      { key: 'trailing_stop_enabled', label: 'Enable Trailing Stop', type: 'boolean', description: 'Enable trailing stop loss to protect profits' },
+      { key: 'trailing_stop_distance', label: 'Trailing Distance %', type: 'number', description: 'Exit if profit falls X% from peak (protects running profits)', min: 0.1, max: 5, step: 0.1 },
+      { key: 'stop_loss_multiplier', label: 'Legacy SL Multiplier', type: 'number', description: 'Exit if premium doubles (used when sl_enabled is false)', min: 1, max: 5, step: 0.5 },
+    ],
+  },
+  {
+    id: 'daily-risk',
+    title: 'Daily Risk Management',
+    icon: '⚠️',
+    description: 'Daily loss limits and square-off settings',
+    fields: [
+      { key: 'max_daily_loss_percent', label: 'Max Daily Loss %', type: 'number', description: 'Stop trading at X% daily loss (negative value, e.g., -3)', min: -10, max: 0, step: 0.5 },
+      { key: 'square_off_time', label: 'Square Off Time', type: 'text', description: 'Auto close all positions at this time (24h format, e.g., 15:25)' },
+    ],
+  },
+  {
+    id: 'position-init',
+    title: 'Position Initialization',
+    icon: '🚀',
+    description: 'Settings for position initialization on strategy start',
+    fields: [
+      { key: 'enable_position_init', label: 'Enable Position Init', type: 'boolean', description: 'Enable position initialization (may create reverse orders to match target)' },
+    ],
+  },
+  {
+    id: 'logging',
+    title: 'Logging',
+    icon: '📝',
+    description: 'Debug and data logging settings',
+    fields: [
+      { key: 'log_tick_data', label: 'Log Tick Data', type: 'boolean', description: 'Enable detailed tick-by-tick data logging (high disk usage)' },
     ],
   },
 ];
 
 // =============================================================================
-// ENHANCED CONFIGURATION GROUPS
+// COMPONENT
 // =============================================================================
-const ENHANCED_CONFIG_GROUPS: ConfigGroup[] = [
-  {
-    title: '🔧 Entry Filters & Technical Indicators',
-    fields: [
-      { key: 'entry_filter_type', label: 'Entry Filter Type', type: 'select', options: ['NONE', 'RSI', 'EMA', 'ADX', 'ALL'], description: 'Type of entry filter to use (NONE = base strategy behavior)' },
-      { key: 'rsi_period', label: 'RSI Period', type: 'number', description: 'RSI calculation period' },
-      { key: 'rsi_min', label: 'RSI Min', type: 'number', description: 'Minimum RSI for entry (don\'t sell CE if RSI < min)' },
-      { key: 'rsi_max', label: 'RSI Max', type: 'number', description: 'Maximum RSI for entry (don\'t sell PE if RSI > max)' },
-      { key: 'adx_period', label: 'ADX Period', type: 'number', description: 'ADX calculation period for trend strength' },
-      { key: 'adx_threshold', label: 'ADX Threshold', type: 'number', description: 'Minimum ADX to confirm trend strength' },
-      { key: 'ema_period', label: 'EMA Period', type: 'number', description: 'EMA period for trend detection filter' },
-    ],
-  },
-  {
-    title: '📊 ATR Settings',
-    fields: [
-      { key: 'atr_period', label: 'ATR Period', type: 'number', description: 'ATR period for volatility measurement' },
-      { key: 'atr_history_days', label: 'ATR History Days', type: 'number', description: 'Days of history to load for indicators' },
-    ],
-  },
-  {
-    title: '🚫 Position Limits',
-    fields: [
-      { key: 'max_positions_per_side', label: 'Max Positions Per Side', type: 'number', description: 'Maximum PE or CE positions separately' },
-      { key: 'max_total_positions', label: 'Max Total Positions', type: 'number', description: 'Maximum combined positions (PE + CE)' },
-      { key: 'max_consecutive_losses', label: 'Max Consecutive Losses', type: 'number', description: 'Pause trading after N consecutive losses' },
-    ],
-  },
-  {
-    title: '🛑 Stop-Loss Settings',
-    fields: [
-      { key: 'sl_enabled', label: 'SL Enabled', type: 'select', options: ['true', 'false'], description: 'Enable automatic SL order placement' },
-      { key: 'sl_percentage', label: 'SL Percentage', type: 'number', description: 'SL at % of entry price (for shorts: entry × (1 + sl%/100))' },
-      { key: 'sl_order_type', label: 'SL Order Type', type: 'select', options: ['STOP', 'STOP_LIMIT'], description: 'STOP (SL-M) or STOP_LIMIT (SL)' },
-      { key: 'sl_limit_buffer', label: 'SL Limit Buffer', type: 'number', description: 'Points buffer for limit price (for SL orders)' },
-      { key: 'sl_reconcile_on_start', label: 'SL Reconcile on Start', type: 'select', options: ['true', 'false'], description: 'Run SL reconciliation at algo startup' },
-      { key: 'sl_state_file', label: 'SL State File', type: 'text', description: 'Path to position state file' },
-    ],
-  },
-  {
-    title: '💰 Profit Target Settings',
-    fields: [
-      { key: 'profit_target_enabled', label: 'Profit Target Enabled', type: 'select', options: ['true', 'false'], description: 'Enable profit target exit' },
-      { key: 'profit_target_percent', label: 'Profit Target Percent', type: 'number', description: 'Exit when X% of premium collected as profit' },
-    ],
-  },
-  {
-    title: '📉 Legacy & Trailing Stop-Loss',
-    fields: [
-      { key: 'stop_loss_multiplier', label: 'Stop Loss Multiplier', type: 'number', description: 'Exit if premium doubles (used when sl_enabled is false)' },
-      { key: 'trailing_stop_enabled', label: 'Trailing Stop Enabled', type: 'select', options: ['true', 'false'], description: 'Enable trailing stop loss' },
-      { key: 'trailing_stop_distance', label: 'Trailing Stop Distance', type: 'number', description: 'Exit if profit falls X% from peak' },
-    ],
-  },
-  {
-    title: '⏰ Daily Limits & Square Off',
-    fields: [
-      { key: 'max_daily_loss_percent', label: 'Max Daily Loss %', type: 'number', description: 'Stop trading at X% daily loss (negative value)' },
-      { key: 'square_off_time', label: 'Square Off Time', type: 'text', description: 'Close all positions at this time (HH:MM format)' },
-    ],
-  },
-  {
-    title: '🔄 Dynamic Gap Adjustment',
-    fields: [
-      { key: 'enable_dynamic_gaps', label: 'Enable Dynamic Gaps', type: 'select', options: ['true', 'false'], description: 'Enable ATR-based dynamic gap adjustment' },
-      { key: 'atr_multiplier_pe', label: 'ATR Multiplier PE', type: 'number', description: 'ATR multiplier for PE gap calculation' },
-      { key: 'atr_multiplier_ce', label: 'ATR Multiplier CE', type: 'number', description: 'ATR multiplier for CE gap calculation' },
-    ],
-  },
-  {
-    title: '📊 Volatility-based Position Sizing',
-    fields: [
-      { key: 'volatility_sizing', label: 'Volatility Sizing', type: 'select', options: ['true', 'false'], description: 'Enable volatility-based position sizing' },
-      { key: 'high_vol_size_reduction', label: 'High Vol Size Reduction', type: 'number', description: 'Trade at X% size in high volatility (0.5 = 50%)' },
-    ],
-  },
-];
-
 export default function ConfigPage() {
   const [config, setConfig] = useState<StrategyConfig | null>(null);
   const [originalConfig, setOriginalConfig] = useState<StrategyConfig | null>(null);
@@ -168,7 +218,10 @@ export default function ConfigPage() {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [validation, setValidation] = useState<ConfigValidationResponse | null>(null);
-  const [activeTab, setActiveTab] = useState<ConfigTab>('base');
+  const [expandedCategories, setExpandedCategories] = useState<Set<string>>(
+    () => new Set(['symbol-market', 'price-gaps', 'stop-loss'])
+  );
+  const [searchTerm, setSearchTerm] = useState('');
 
   const fetchConfig = useCallback(async () => {
     try {
@@ -238,33 +291,79 @@ export default function ConfigPage() {
     setValidation(null);
   };
 
+  const toggleCategory = (categoryId: string) => {
+    setExpandedCategories(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(categoryId)) {
+        newSet.delete(categoryId);
+      } else {
+        newSet.add(categoryId);
+      }
+      return newSet;
+    });
+  };
+
+  const expandAll = () => {
+    setExpandedCategories(new Set(CONFIG_CATEGORIES.map(c => c.id)));
+  };
+
+  const collapseAll = () => {
+    setExpandedCategories(new Set());
+  };
+
   const hasChanges = JSON.stringify(config) !== JSON.stringify(originalConfig);
+
+  // Filter categories based on search
+  const filteredCategories = searchTerm
+    ? CONFIG_CATEGORIES.map(cat => ({
+        ...cat,
+        fields: cat.fields.filter(
+          f =>
+            f.label.toLowerCase().includes(searchTerm.toLowerCase()) ||
+            f.description.toLowerCase().includes(searchTerm.toLowerCase()) ||
+            (f.key as string).toLowerCase().includes(searchTerm.toLowerCase())
+        ),
+      })).filter(cat => cat.fields.length > 0)
+    : CONFIG_CATEGORIES;
 
   const renderField = (field: ConfigField) => {
     if (!config) return null;
 
     const value = config[field.key];
+    const hasError = validation?.errors.some(e => e.toLowerCase().includes((field.key as string).toLowerCase()));
+
+    if (field.type === 'boolean') {
+      return (
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => handleChange(field.key, !value)}
+            className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 ${
+              value ? 'bg-primary-600' : 'bg-gray-200'
+            }`}
+          >
+            <span
+              className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                value ? 'translate-x-6' : 'translate-x-1'
+              }`}
+            />
+          </button>
+          <span className="text-sm text-gray-700">{value ? 'Enabled' : 'Disabled'}</span>
+        </div>
+      );
+    }
 
     if (field.type === 'select') {
       return (
         <select
           id={field.key as string}
-          className="form-input"
-          value={String(value)}
-          onChange={(e) => {
-            const newValue = e.target.value;
-            if (field.key === 'sl_enabled' || field.key === 'sl_reconcile_on_start' ||
-                field.key === 'profit_target_enabled' || field.key === 'trailing_stop_enabled' ||
-                field.key === 'enable_dynamic_gaps' || field.key === 'volatility_sizing') {
-              handleChange(field.key, newValue === 'true');
-            } else {
-              handleChange(field.key, newValue);
-            }
-          }}
+          className={`form-input ${hasError ? 'border-red-500 focus:border-red-500 focus:ring-red-500' : ''}`}
+          value={String(value ?? '')}
+          onChange={(e) => handleChange(field.key, e.target.value)}
         >
           {field.options?.map((option) => (
             <option key={option} value={option}>
-              {option === 'true' ? 'Yes' : option === 'false' ? 'No' : option}
+              {option}
             </option>
           ))}
         </select>
@@ -275,38 +374,91 @@ export default function ConfigPage() {
       <input
         id={field.key as string}
         type={field.type}
-        className="form-input"
+        className={`form-input ${hasError ? 'border-red-500 focus:border-red-500 focus:ring-red-500' : ''}`}
         value={typeof value === 'boolean' ? String(value) : (value ?? '')}
         onChange={(e) => handleChange(
           field.key,
           field.type === 'number' ? parseFloat(e.target.value) || 0 : e.target.value
         )}
+        min={field.min}
+        max={field.max}
+        step={field.step}
       />
     );
   };
 
-  const renderConfigGroups = (groups: ConfigGroup[]) => (
-    <div className="space-y-6">
-      {groups.map((group) => (
-        <div key={group.title} className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-          <div className="px-6 py-4 border-b border-gray-200 bg-gray-50">
-            <h3 className="text-lg font-medium text-gray-900">{group.title}</h3>
+  const renderCategory = (category: ConfigCategory) => {
+    const isExpanded = expandedCategories.has(category.id);
+    const hasErrors = validation?.errors.some(e =>
+      category.fields.some(f => e.toLowerCase().includes((f.key as string).toLowerCase()))
+    );
+
+    return (
+      <div
+        key={category.id}
+        className={`bg-white rounded-xl shadow-sm border overflow-hidden transition-all duration-200 ${
+          hasErrors ? 'border-red-300 ring-1 ring-red-300' : 'border-gray-200'
+        }`}
+      >
+        <button
+          type="button"
+          onClick={() => toggleCategory(category.id)}
+          className="w-full px-6 py-4 flex items-center justify-between bg-gray-50 hover:bg-gray-100 transition-colors"
+        >
+          <div className="flex items-center gap-3">
+            <span className="text-2xl">{category.icon}</span>
+            <div className="text-left">
+              <h3 className="text-lg font-semibold text-gray-900">{category.title}</h3>
+              <p className="text-sm text-gray-500">{category.description}</p>
+            </div>
           </div>
-          <div className="p-6 space-y-4">
-            {group.fields.map((field) => (
+          <div className="flex items-center gap-2">
+            {hasErrors && (
+              <span className="px-2 py-1 text-xs font-medium text-red-700 bg-red-100 rounded-full">
+                Error
+              </span>
+            )}
+            <svg
+              className={`w-5 h-5 text-gray-500 transform transition-transform ${isExpanded ? 'rotate-180' : ''}`}
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+            </svg>
+          </div>
+        </button>
+
+        {isExpanded && (
+          <div className="p-6 space-y-5">
+            {category.fields.map((field) => (
               <div key={field.key as string} className="form-group">
-                <label className="form-label" htmlFor={field.key as string}>
-                  {field.label}
-                </label>
+                <div className="flex items-center justify-between mb-2">
+                  <label
+                    className="form-label text-sm font-medium text-gray-700"
+                    htmlFor={field.key as string}
+                  >
+                    {field.label}
+                  </label>
+                  <code className="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded">
+                    {field.key as string}
+                  </code>
+                </div>
                 {renderField(field)}
-                <p className="mt-1 text-sm text-gray-500">{field.description}</p>
+                <p className="mt-1.5 text-sm text-gray-500">{field.description}</p>
+                {field.min !== undefined && field.max !== undefined && (
+                  <p className="mt-1 text-xs text-gray-400">
+                    Range: {field.min} to {field.max}
+                    {field.step && field.step < 1 ? ` (step: ${field.step})` : ''}
+                  </p>
+                )}
               </div>
             ))}
           </div>
-        </div>
-      ))}
-    </div>
-  );
+        )}
+      </div>
+    );
+  };
 
   if (loading) {
     return (
@@ -322,13 +474,13 @@ export default function ConfigPage() {
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Header */}
-      <header className="bg-white shadow-sm border-b border-gray-200">
+      <header className="bg-white shadow-sm border-b border-gray-200 sticky top-0 z-10">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
           <div className="flex items-center justify-between">
             <div>
               <h1 className="text-2xl font-bold text-gray-900">Strategy Configuration</h1>
               <p className="text-sm text-gray-500 mt-1">
-                Configure parameters for the Survivor trading strategy
+                Configure parameters for the Enhanced Survivor trading strategy
               </p>
             </div>
             <Link href="/" className="btn-secondary">
@@ -339,72 +491,85 @@ export default function ConfigPage() {
       </header>
 
       <main className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {/* Tab Navigation */}
-        <div className="mb-8">
-          <div className="border-b border-gray-200">
-            <nav className="-mb-px flex space-x-8" aria-label="Tabs">
-              <button
-                onClick={() => setActiveTab('base')}
-                className={`
-                  whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm
-                  ${activeTab === 'base'
-                    ? 'border-primary-500 text-primary-600'
-                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-                  }
-                `}
+        {/* Search and Controls */}
+        <div className="mb-6 space-y-4">
+          <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-center justify-between">
+            <div className="relative flex-1 max-w-md">
+              <input
+                type="text"
+                placeholder="Search settings..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+              />
+              <svg
+                className="absolute left-3 top-2.5 h-5 w-5 text-gray-400"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
               >
-                <span className="flex items-center gap-2">
-                  <span>⚙️</span>
-                  Base Configuration
-                  <span className="ml-2 px-2 py-0.5 rounded-full text-xs bg-blue-100 text-blue-800">
-                    Core
-                  </span>
-                </span>
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+              </svg>
+            </div>
+            <div className="flex gap-2">
+              <button onClick={expandAll} className="btn-secondary text-sm">
+                Expand All
               </button>
-              <button
-                onClick={() => setActiveTab('enhanced')}
-                className={`
-                  whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm
-                  ${activeTab === 'enhanced'
-                    ? 'border-primary-500 text-primary-600'
-                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-                  }
-                `}
-              >
-                <span className="flex items-center gap-2">
-                  <span>✨</span>
-                  Enhanced Configuration
-                  <span className="ml-2 px-2 py-0.5 rounded-full text-xs bg-purple-100 text-purple-800">
-                    Advanced
-                  </span>
-                </span>
+              <button onClick={collapseAll} className="btn-secondary text-sm">
+                Collapse All
               </button>
-            </nav>
+            </div>
           </div>
-          <p className="mt-3 text-sm text-gray-500">
-            {activeTab === 'base'
-              ? 'Base configuration includes essential parameters for the Survivor strategy. These settings are required for all strategy versions.'
-              : 'Enhanced configuration provides advanced features like position limits, stop-loss management, and dynamic gap adjustments.'}
-          </p>
         </div>
 
         {/* Alerts */}
         {error && (
           <div className="mb-6 bg-red-50 border border-red-200 rounded-lg p-4">
-            <p className="text-red-800">{error}</p>
+            <div className="flex items-start gap-3">
+              <svg className="h-5 w-5 text-red-500 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              <p className="text-red-800">{error}</p>
+            </div>
           </div>
         )}
 
         {success && (
           <div className="mb-6 bg-green-50 border border-green-200 rounded-lg p-4">
-            <p className="text-green-800">{success}</p>
+            <div className="flex items-start gap-3">
+              <svg className="h-5 w-5 text-green-500 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              <p className="text-green-800">{success}</p>
+            </div>
+          </div>
+        )}
+
+        {validation && validation.errors.length > 0 && (
+          <div className="mb-6 bg-red-50 border border-red-200 rounded-lg p-4">
+            <h4 className="font-medium text-red-800 mb-2 flex items-center gap-2">
+              <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+              </svg>
+              Validation Errors:
+            </h4>
+            <ul className="list-disc list-inside text-red-700 text-sm space-y-1">
+              {validation.errors.map((err, i) => (
+                <li key={i}>{err}</li>
+              ))}
+            </ul>
           </div>
         )}
 
         {validation && validation.warnings.length > 0 && (
           <div className="mb-6 bg-yellow-50 border border-yellow-200 rounded-lg p-4">
-            <h4 className="font-medium text-yellow-800 mb-2">Warnings:</h4>
-            <ul className="list-disc list-inside text-yellow-700 text-sm">
+            <h4 className="font-medium text-yellow-800 mb-2 flex items-center gap-2">
+              <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              Warnings:
+            </h4>
+            <ul className="list-disc list-inside text-yellow-700 text-sm space-y-1">
               {validation.warnings.map((warning, i) => (
                 <li key={i}>{warning}</li>
               ))}
@@ -412,23 +577,42 @@ export default function ConfigPage() {
           </div>
         )}
 
-        {/* Configuration Form */}
-        {activeTab === 'base'
-          ? renderConfigGroups(BASE_CONFIG_GROUPS)
-          : renderConfigGroups(ENHANCED_CONFIG_GROUPS)
-        }
+        {/* Configuration Categories */}
+        <div className="space-y-4">
+          {filteredCategories.map(renderCategory)}
+        </div>
+
+        {/* Empty State for Search */}
+        {filteredCategories.length === 0 && (
+          <div className="text-center py-12">
+            <svg className="mx-auto h-12 w-12 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+            </svg>
+            <h3 className="mt-2 text-sm font-medium text-gray-900">No settings found</h3>
+            <p className="mt-1 text-sm text-gray-500">Try adjusting your search terms.</p>
+          </div>
+        )}
 
         {/* Action Buttons */}
-        <div className="mt-8 flex justify-between items-center">
-          <div className="flex items-center gap-4">
-            <button
-              onClick={() => setActiveTab(activeTab === 'base' ? 'enhanced' : 'base')}
-              className="btn-secondary"
-            >
-              {activeTab === 'base' ? 'Go to Enhanced →' : '← Go to Base'}
-            </button>
+        <div className="mt-8 flex flex-col sm:flex-row justify-between items-center gap-4">
+          <div className="text-sm text-gray-500">
+            {hasChanges ? (
+              <span className="flex items-center gap-2 text-amber-600">
+                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                Unsaved changes
+              </span>
+            ) : (
+              <span className="flex items-center gap-2 text-green-600">
+                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                </svg>
+                All changes saved
+              </span>
+            )}
           </div>
-          <div className="flex space-x-4">
+          <div className="flex gap-4">
             <button
               onClick={handleReset}
               disabled={!hasChanges || saving}
@@ -441,7 +625,17 @@ export default function ConfigPage() {
               disabled={!hasChanges || saving}
               className="btn-primary"
             >
-              {saving ? 'Saving...' : 'Save Configuration'}
+              {saving ? (
+                <span className="flex items-center gap-2">
+                  <svg className="animate-spin h-4 w-4" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                  </svg>
+                  Saving...
+                </span>
+              ) : (
+                'Save Configuration'
+              )}
             </button>
           </div>
         </div>

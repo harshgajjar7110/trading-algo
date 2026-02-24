@@ -1,0 +1,113 @@
+default:
+  # ============================================================================
+  # SYMBOL & MARKET SETTINGS
+  # ============================================================================
+  symbol_initials: NIFTY0302
+  index_symbol: NSE:NIFTY 50
+  exchange: NFO
+  product_type: NRML
+  order_type: MARKET
+  trans_type: SELL
+  tag: SurvivorEnhanced
+  
+  # ============================================================================
+  # STRIKE SELECTION (Distance from Spot)
+  # ============================================================================
+  pe_symbol_gap: 600
+  ce_symbol_gap: 600
+  
+  # ============================================================================
+  # REFERENCE POINTS (Starting Values)
+  # ============================================================================
+  pe_start_point: 0      # 0 = use current market price
+  ce_start_point: 25600  # 0 = use current market price
+  
+  # ============================================================================
+  # PRICE GAPS (Movement Thresholds)
+  # ============================================================================
+  pe_gap: 40
+  ce_gap: 40
+  pe_reset_gap: 30
+  ce_reset_gap: 30
+  sell_multiplier_threshold: 2
+  
+  # ============================================================================
+  # QUANTITY SETTINGS
+  # ============================================================================
+  pe_quantity: 65
+  ce_quantity: 65
+  
+  # ============================================================================
+  # ENTRY FILTERS
+  # ============================================================================
+  min_price_to_sell: 15.0
+  entry_filter_type: NONE  # NONE, RSI, EMA, ADX, ALL
+  
+  # ============================================================================
+  # TECHNICAL INDICATORS
+  # ============================================================================
+  rsi_period: 14
+  rsi_min: 30      # Don't sell CE when RSI below this
+  rsi_max: 70      # Don't sell PE when RSI above this
+  ema_period: 20
+  adx_period: 14
+  adx_threshold: 25
+  atr_period: 14
+  atr_history_days: 5
+  atr_multiplier_pe: 10.0
+  atr_multiplier_ce: 10.0
+  enable_dynamic_gaps: true
+  history_period_days: 5
+  
+  # ============================================================================
+  # POSITION LIMITS
+  # ============================================================================
+  max_positions_per_side: 3
+  max_total_positions: 5
+  max_consecutive_losses: 2
+  
+  # ============================================================================
+  # VOLATILITY-BASED SIZING
+  # ============================================================================
+  volatility_sizing: false
+  high_vol_size_reduction: 0.5
+  
+  # ============================================================================
+  # PROFIT TARGET SETTINGS
+  # ============================================================================
+  profit_target_enabled: true
+  profit_target_percent: 55
+  profit_check_interval: 20  # seconds
+  
+  # ============================================================================
+  # STOP-LOSS (SL) ORDER SETTINGS
+  # ============================================================================
+  sl_enabled: true
+  sl_percentage: 60
+  sl_order_type: STOP_LIMIT  # STOP or STOP_LIMIT
+  sl_limit_buffer: 0.05
+  sl_reconcile_on_start: true
+  sl_state_file: artifacts/survivor_enhanced_position_state.json
+  
+  # ============================================================================
+  # TRAILING STOP SETTINGS
+  # ============================================================================
+  trailing_stop_enabled: false
+  trailing_stop_distance: 0.5
+  stop_loss_multiplier: 2.0
+  
+  # ============================================================================
+  # DAILY RISK MANAGEMENT
+  # ============================================================================
+  max_daily_loss_percent: -3.0
+  square_off_time: '15:25'
+  
+  # ============================================================================
+  # POSITION INITIALIZATION
+  # ============================================================================
+  enable_position_init: false  # Disable to avoid reverse orders
+  
+  # ============================================================================
+  # LOGGING
+  # ============================================================================
+  log_tick_data: false

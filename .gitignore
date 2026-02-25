@@ -12,6 +12,8 @@ strategy/.cache/zerodha_master_contract.csv
 strategy/configs/.wave.yml.swp
 brokers/.DS_Store
 .cache/zerodha_master_contract.csv
+web/backend/.cache/
+web/backend/artifacts/
 wave_new.py
 
 # Web frontend

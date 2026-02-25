@@ -6,6 +6,7 @@ Handles starting, stopping, and monitoring strategy processes.
 Supports both single strategy mode (backward compatible) and multi-strategy mode.
 """
 import asyncio
+import logging
 import multiprocessing
 import os
 import sys
@@ -15,6 +16,8 @@ import traceback
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional, Callable
+
+logger = logging.getLogger(__name__)
 
 # Add project root to Python path for imports
 _project_root = Path(__file__).resolve().parents[4]
@@ -304,7 +307,7 @@ class StrategyManager:
             self._registry.set_current_instance(instance)
             
             self._state_queue = multiprocessing.Queue()
-            
+
             self._process = multiprocessing.Process(
                 target=self._run_strategy_process,
                 args=(strategy_id, instance.config, self._state_queue)

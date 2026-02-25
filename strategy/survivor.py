@@ -132,11 +132,15 @@ class SurvivorStrategy:
                    f"sl_reconcile_on_start={config.get('sl_reconcile_on_start', True)}, "
                    f"sl_percentage={config.get('sl_percentage', 60)}%")
         
+        # Validate required config keys before processing
+        if 'symbol_initials' not in config:
+            raise AttributeError("Config missing required 'symbol_initials' key. Please check strategy/configs/survivor.yml")
+
         # Initialize base attributes (previously from parent class)
         # Assign config values as instance variables with 'strat_var_' prefix
         for k, v in config.items():
             setattr(self, f'strat_var_{k}', v)
-        
+
         # External dependencies
         self.broker = broker
         self.symbol_initials = self.strat_var_symbol_initials
@@ -335,7 +339,7 @@ class SurvivorStrategy:
         
         # Filter instruments for matching criteria
         df = self.instruments[
-            (self.instruments['symbol'].str.contains(self.strat_var_symbol_initials)) &
+            (self.instruments['symbol'].str.contains(self.symbol_initials)) &
             (self.instruments['instrument_type'] == option_type) &
             (self.instruments['segment'] == "NFO-OPT")
         ]
@@ -347,11 +351,11 @@ class SurvivorStrategy:
         df['target_strike_diff'] = (df['strike'] - target_strike).abs()
         
         # Filter to strikes within half strike difference (tolerance for rounding)
-        tolerance = self._get_strike_difference(self.strat_var_symbol_initials) / 2
+        tolerance = self._get_strike_difference(self.symbol_initials) / 2
         df = df[df['target_strike_diff'] <= tolerance]
         
         if df.empty:
-            logger.error(f"No instrument found for {self.strat_var_symbol_initials} {option_type} "
+            logger.error(f"No instrument found for {self.symbol_initials} {option_type} "
                         f"within {tolerance} of {target_strike}")
             return None
             
@@ -402,7 +406,7 @@ class SurvivorStrategy:
     def _log_stable_market(self, current_val):
         """Log current market state when no trading action is taken"""
         logger.info(
-            f"{self.strat_var_symbol_initials} Nifty under control. "
+            f"{self.symbol_initials} Nifty under control. "
             f"PE = {self.nifty_pe_last_value}, "
             f"CE = {self.nifty_ce_last_value}, "
             f"Current = {current_val}, "
@@ -1910,8 +1914,8 @@ if __name__ == "__main__":
     config_file = os.path.join(os.path.dirname(__file__), "configs/survivor.yml")
     with open(config_file, 'r') as f:
         config = yaml.safe_load(f)['default']
-    print(config)
     logger.info("=" * 80)
+    logger.info(config)
     logger.info("ENHANCED SURVIVOR STRATEGY - STARTING")
     logger.info("=" * 80)
     
@@ -1921,7 +1925,7 @@ if __name__ == "__main__":
     logger.info(f"SL Enabled: {config.get('sl_enabled', True)}")
     logger.info(f"SL Percentage: {config.get('sl_percentage', 60)}%")
     logger.info(f"SL Reconcile on Start: {config.get('sl_reconcile_on_start', True)}")
-    logger.info(f"Tick Logging: {config.get('log_tick_data', False)}")
+    logger.info(f"Tick Logging: {config.get('log_tick_data', True)}")
     logger.info(f"Profit Target Enabled: {config.get('profit_target_enabled', True)}")
     logger.info(f"Profit Target: {config.get('profit_target_percent', 60)}%")
     logger.info(f"Profit Check Interval: {config.get('profit_check_interval', 300)}s ({config.get('profit_check_interval', 300)//60} minutes)")

@@ -46,7 +46,7 @@ class StrategyConfig(BaseModel):
     
     # Core Parameters
     index_symbol: str = "NSE:NIFTY 50"
-    symbol_initials: str = "NIFTY26FEB"
+    symbol_initials: str = "NIFTY26310"
     
     # Gap Parameters
     pe_gap: int = 40
@@ -108,8 +108,6 @@ class StrategyConfig(BaseModel):
     sl_order_type: str = "STOP_LIMIT"
     sl_limit_buffer: float = 0.05
     sl_reconcile_on_start: bool = True
-    sl_state_file: str = "artifacts/survivor_position_state.json"
-
     # ============================================================
     # ENHANCED: Profit Target Settings
     # ============================================================

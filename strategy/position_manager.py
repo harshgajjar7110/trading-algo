@@ -4,8 +4,11 @@ Position Manager - SL Order Reconciliation for Survivor Strategy
 This module handles:
 1. Detection of open positions from broker at algo startup
 2. SL order placement for unprotected positions
-3. Position-SL mapping persistence
+3. Position-SL mapping (in-memory only, no file persistence)
 4. Reconciliation logic for Survivor Strategy (Zerodha only)
+
+CRITICAL: Positions are always fetched fresh from broker - NO state file persistence.
+Saving state to files creates stale positions and causes false entries/charges.
 
 Assumptions (per requirements):
 - Survivor strategy only (enhanced version)
@@ -14,12 +17,9 @@ Assumptions (per requirements):
 - No existing SL orders at reconciliation (simplified)
 """
 
-import json
-import os
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple, Any
-from pathlib import Path
 
 from logger import strategy_logger as logger
 from brokers import BrokerGateway, OrderRequest, Exchange, OrderType, TransactionType, ProductType
@@ -31,7 +31,8 @@ class PositionState:
     """
     Tracks a position and its associated SL order.
     
-    This is used for state persistence across algo restarts.
+    This is used for in-memory tracking only - NEVER persisted to disk.
+    Positions are always fetched fresh from broker to avoid stale data.
     """
     symbol: str                           # Trading symbol e.g., NIFTY24FEB18000CE
     exchange: str                         # Exchange (NFO)
@@ -78,10 +79,12 @@ class PositionManager:
     Manages position tracking and SL order reconciliation for Survivor Strategy.
     
     Responsibilities:
-    - Track open positions with SL order mapping
+    - Track open positions with SL order mapping (in-memory only)
     - Reconcile broker positions with local state at startup
     - Place missing SL orders for unprotected positions
-    - Persist position state to disk
+    - NEVER persist position state to disk (prevents false entries)
+    
+    CRITICAL: Positions are always fetched fresh from broker. No state files.
     
     NOTE: This implementation is specific to:
     - Survivor Strategy (enhanced version)
@@ -92,8 +95,7 @@ class PositionManager:
     def __init__(
         self,
         broker: BrokerGateway,
-        config: Dict[str, Any],
-        state_file: str = "artifacts/survivor_position_state.json"
+        config: Dict[str, Any]
     ):
         """
         Initialize PositionManager.
@@ -101,10 +103,8 @@ class PositionManager:
         Args:
             broker: BrokerGateway instance for order operations
             config: Strategy configuration dict
-            state_file: Path to JSON file for persisting position state
         """
         self.broker = broker
-        self.state_file = state_file
         self._position_states: Dict[str, PositionState] = {}
         
         # Extract SL settings from config
@@ -142,9 +142,9 @@ class PositionManager:
         logger.info("=" * 80)
         
         try:
-            # Step 1: Load persisted state
-            self.load_state()
-            logger.info(f"[RECON] Loaded {len(self._position_states)} positions from state file")
+            # Step 1: Clear any stale in-memory state (NO file persistence - always use fresh broker data)
+            self._position_states.clear()
+            logger.info(f"[RECON] Using fresh broker data only - no state file loaded")
             
             # Step 2: Fetch current broker positions
             broker_positions = self._fetch_broker_positions()
@@ -206,8 +206,8 @@ class PositionManager:
                     logger.error(f"[RECON] {error_msg}")
                     result.errors.append(error_msg)
             
-            # Step 6: Persist updated state
-            self.save_state()
+            # Step 6: NO state persistence - positions remain in memory only
+            # State files create stale data and false entries - always use fresh broker data
             
             # Log summary
             logger.info("=" * 80)
@@ -253,8 +253,9 @@ class PositionManager:
             for order in orderbook:
                 status = order.get('status', '').upper()
                 # Consider these statuses as "active" orders
-                if status in ('OPEN', 'PENDING', 'AMO REQ RECEIVED', 'PUT ORDER REQ RECEIVED', 
-                             'VALIDATION PENDING', 'OPEN PENDING', 'MODIFY PENDING'):
+                if status in ('OPEN', 'PENDING', 'TRIGGER PENDING', 'AMO REQ RECEIVED',
+                             'PUT ORDER REQ RECEIVED', 'VALIDATION PENDING', 'OPEN PENDING',
+                             'MODIFY PENDING'):
                     open_orders.append(order)
             
             logger.info(f"[RECON] Fetched {len(open_orders)} open orders from orderbook")
@@ -450,50 +451,6 @@ class PositionManager:
             position_id=f"{position.symbol}_{position.exchange.value}_{position.product_type.value}"
         )
     
-    def save_state(self) -> None:
-        """Persist position states to disk."""
-        try:
-            # Ensure directory exists
-            Path(self.state_file).parent.mkdir(parents=True, exist_ok=True)
-            
-            # Convert to dict for JSON serialization
-            state_dict = {
-                "last_updated": datetime.now().isoformat(),
-                "positions": {
-                    pos_id: asdict(state) 
-                    for pos_id, state in self._position_states.items()
-                }
-            }
-            
-            with open(self.state_file, 'w') as f:
-                json.dump(state_dict, f, indent=2)
-            
-            logger.debug(f"Saved {len(self._position_states)} positions to state file")
-            
-        except Exception as e:
-            logger.error(f"Failed to save position state: {e}")
-    
-    def load_state(self) -> None:
-        """Load position states from disk."""
-        try:
-            if not os.path.exists(self.state_file):
-                logger.info(f"[RECON] State file not found: {self.state_file}")
-                return
-            
-            with open(self.state_file, 'r') as f:
-                state_dict = json.load(f)
-            
-            # Convert dict back to PositionState objects
-            self._position_states = {}
-            for pos_id, pos_data in state_dict.get("positions", {}).items():
-                self._position_states[pos_id] = PositionState(**pos_data)
-            
-            logger.info(f"[RECON] Loaded {len(self._position_states)} positions from state file")
-            
-        except Exception as e:
-            logger.error(f"[RECON] Failed to load position state: {e}")
-            self._position_states = {}
-    
     def register_sl_order(
         self, 
         position: Position, 
@@ -526,7 +483,6 @@ class PositionManager:
             position_id=position_id
         )
         
-        self.save_state()
         logger.info(f"Registered SL order {sl_order_id} for {position.symbol}")
     
     def clear_position(self, symbol: str, exchange: str = "NFO", product_type: str = "NRML") -> None:
@@ -542,7 +498,6 @@ class PositionManager:
         
         if position_id in self._position_states:
             del self._position_states[position_id]
-            self.save_state()
             logger.info(f"Cleared position {position_id} from tracking")
     
     def update_position_sl(
@@ -572,7 +527,6 @@ class PositionManager:
             self._position_states[position_id].sl_trigger_price = sl_trigger
             self._position_states[position_id].sl_limit_price = sl_limit
             self._position_states[position_id].last_updated = datetime.now().isoformat()
-            self.save_state()
             logger.info(f"Updated SL order {sl_order_id} for {symbol}")
         else:
             # Position not tracked yet, create new state
@@ -590,7 +544,6 @@ class PositionManager:
                 last_updated=datetime.now().isoformat(),
                 position_id=position_id
             )
-            self.save_state()
     
     def remove_position(self, symbol: str, exchange: str = "NFO", product_type: str = "NRML") -> None:
         """

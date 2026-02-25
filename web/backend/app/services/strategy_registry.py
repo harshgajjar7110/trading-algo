@@ -82,7 +82,8 @@ class StrategyRegistry:
     
     def _register_default_strategies(self):
         """Register built-in strategies"""
-        project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
+        # Go up 5 levels: app/services/ -> app/ -> backend/ -> web/ -> project_root/
+        project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))))
         
         # Survivor Strategy (Default/Main)
         self.register(StrategyInfo(
@@ -100,6 +101,7 @@ class StrategyRegistry:
             risk_level="medium-high",
             recommended_capital="₹10L+",
             default_params={
+                "symbol_initials": "NIFTY26310",  # Fallback value - should be overridden by config file
                 "pe_gap": 40,
                 "ce_gap": 40,
                 "pe_symbol_gap": 800,

@@ -4,7 +4,15 @@ import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import yaml
-from logger import strategy_logger as logger
+
+# Use unified logger (with backward compatibility)
+try:
+    from utils.logging import get_strategy_logger
+    logger = get_strategy_logger("wave")
+except ImportError:
+    # Fallback to legacy logger for backward compatibility
+    from logger import strategy_logger as logger
+
 # from brokers.zerodha import ZerodhaBroker
 from brokers import BrokerGateway, OrderRequest, Exchange, OrderType, TransactionType, ProductType
 import datetime

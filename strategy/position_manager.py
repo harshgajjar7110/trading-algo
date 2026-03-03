@@ -21,7 +21,14 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple, Any
 
-from logger import strategy_logger as logger
+# Use unified logger (with backward compatibility)
+try:
+    from utils.logging import get_strategy_logger
+    logger = get_strategy_logger("position_manager")
+except ImportError:
+    # Fallback to legacy logger for backward compatibility
+    from logger import strategy_logger as logger
+
 from brokers import BrokerGateway, OrderRequest, Exchange, OrderType, TransactionType, ProductType
 from brokers.core.schemas import Position, OrderResponse
 

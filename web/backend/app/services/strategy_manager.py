@@ -5,6 +5,7 @@ Manages the lifecycle of trading strategies.
 Handles starting, stopping, and monitoring strategy processes.
 Supports both single strategy mode (backward compatible) and multi-strategy mode.
 """
+
 import asyncio
 import logging
 import multiprocessing
@@ -27,14 +28,18 @@ if str(_project_root) not in sys.path:
 from app.config import StrategyConfig, settings
 from app.models.schemas import StrategyState, StrategyStatus
 from app.services.strategy_registry import (
-    StrategyRegistry, StrategyInstance, StrategyType
+    StrategyRegistry,
+    StrategyInstance,
+    StrategyType,
 )
+from app.services.live_data_manager import live_data_manager
+from app.services.telegram_notifier import telegram_notifier
 
 
 class StrategyManager:
     """
     Unified Strategy Manager supporting both single and multi-strategy modes.
-    
+
     Features:
     - Backward compatible single strategy mode (Survivor)
     - Multi-strategy support with registry
@@ -42,114 +47,114 @@ class StrategyManager:
     - Per-strategy config management
     - Clear identification of running strategy
     """
-    
-    _instance: Optional['StrategyManager'] = None
-    
+
+    _instance: Optional["StrategyManager"] = None
+
     def __new__(cls):
         if cls._instance is None:
             cls._instance = super().__new__(cls)
             cls._instance._initialized = False
         return cls._instance
-    
+
     def __init__(self):
         if self._initialized:
             return
-        
+
         self._initialized = True
         self._registry = StrategyRegistry()
-        
+
         # Current state
         self._process: Optional[multiprocessing.Process] = None
         self._state_queue: Optional[multiprocessing.Queue] = None
         self._current_instance: Optional[StrategyInstance] = None
-        
+
         # Status tracking
         self._status = StrategyStatus.STOPPED
         self._start_time: Optional[float] = None
         self._error_message: Optional[str] = None
-        
+
         # State cache for quick access
         self._nifty_pe_last_value: Optional[float] = None
         self._nifty_ce_last_value: Optional[float] = None
         self._pe_reset_flag: bool = False
         self._ce_reset_flag: bool = False
         self._last_update: Optional[datetime] = None
-        
+
         # Callbacks for state changes
         self._on_state_change: Optional[Callable] = None
-        
+
         # Legacy config support (for backward compatibility)
         self._config: Optional[StrategyConfig] = None
         self._load_legacy_config()
-    
+
     # ==================== Legacy/Backward Compatible Methods ====================
-    
+
     def _load_legacy_config(self) -> Optional[StrategyConfig]:
         """Load configuration from YAML file (backward compatibility)."""
         config_path = settings.STRATEGY_CONFIG_PATH
-        
+
         if os.path.exists(config_path):
-            with open(config_path, 'r') as f:
+            with open(config_path, "r") as f:
                 config_data = yaml.safe_load(f)
-                if config_data and 'default' in config_data:
-                    self._config = StrategyConfig(**config_data['default'])
+                if config_data and "default" in config_data:
+                    self._config = StrategyConfig(**config_data["default"])
         else:
             self._config = StrategyConfig()
-            
+
         return self._config
-    
+
     def get_config(self) -> StrategyConfig:
         """Get current configuration (backward compatibility)."""
         if self._config is None:
             self._load_legacy_config()
         return self._config
-    
+
     def update_config(self, updates: Dict[str, Any]) -> StrategyConfig:
         """
         Update configuration with new values (backward compatibility).
-        
+
         Args:
             updates: Dictionary of configuration updates
-            
+
         Returns:
             Updated configuration
         """
         if self._config is None:
             self._load_legacy_config()
-            
+
         for key, value in updates.items():
             if value is not None and hasattr(self._config, key):
                 setattr(self._config, key, value)
-        
+
         self._save_legacy_config()
         return self._config
-    
+
     def _save_legacy_config(self) -> None:
         """Save current configuration to YAML file (backward compatibility)."""
         config_path = settings.STRATEGY_CONFIG_PATH
-        config_data = {'default': self._config.model_dump()}
+        config_data = {"default": self._config.model_dump()}
         os.makedirs(os.path.dirname(config_path), exist_ok=True)
-        
-        with open(config_path, 'w') as f:
+
+        with open(config_path, "w") as f:
             yaml.dump(config_data, f, default_flow_style=False)
-    
+
     # ==================== Multi-Strategy Methods ====================
-    
+
     def get_available_strategies(self) -> Dict:
         """Get list of available strategies for selection."""
         return {
             "strategies": self._registry.get_strategy_comparison(),
-            "current": self.get_current_strategy_info()
+            "current": self.get_current_strategy_info(),
         }
-    
+
     def get_strategy_details(self, strategy_id: str) -> Optional[Dict]:
         """Get detailed info about a specific strategy."""
         info = self._registry.get(strategy_id)
         if not info:
             return None
-        
+
         config = self._registry.load_config(strategy_id)
-        
+
         return {
             "id": info.id,
             "name": info.name,
@@ -162,8 +167,10 @@ class StrategyManager:
             "current_config": config,
             "config_path": info.config_path,
         }
-    
-    def preview_strategy_config(self, strategy_id: str, config_override: Optional[Dict] = None) -> Dict:
+
+    def preview_strategy_config(
+        self, strategy_id: str, config_override: Optional[Dict] = None
+    ) -> Dict:
         """
         Preview the configuration that will be used when starting a strategy.
         This allows users to confirm parameters before starting.
@@ -171,33 +178,35 @@ class StrategyManager:
         info = self._registry.get(strategy_id)
         if not info:
             return {"error": f"Strategy not found: {strategy_id}"}
-        
+
         base_config = self._registry.load_config(strategy_id)
         preview_config = base_config.copy()
         if config_override:
             preview_config.update(config_override)
-        
+
         errors = self._registry.validate_config(strategy_id, preview_config)
-        
+
         differences = []
         for key, value in preview_config.items():
             if key in info.default_params and info.default_params[key] != value:
-                differences.append({
-                    "param": key,
-                    "default": info.default_params[key],
-                    "current": value
-                })
-        
+                differences.append(
+                    {
+                        "param": key,
+                        "default": info.default_params[key],
+                        "current": value,
+                    }
+                )
+
         sl_config = {
-            "enabled": preview_config.get('sl_enabled', False),
-            "percentage": preview_config.get('sl_percentage', 60),
-            "order_type": preview_config.get('sl_order_type', 'STOP_LIMIT'),
-            "limit_buffer": preview_config.get('sl_limit_buffer', 5.0),
-            "reconcile_on_start": preview_config.get('sl_reconcile_on_start', True),
+            "enabled": preview_config.get("sl_enabled", False),
+            "percentage": preview_config.get("sl_percentage", 60),
+            "order_type": preview_config.get("sl_order_type", "STOP_LIMIT"),
+            "limit_buffer": preview_config.get("sl_limit_buffer", 5.0),
+            "reconcile_on_start": preview_config.get("sl_reconcile_on_start", True),
         }
-        
+
         sl_preview = self._calculate_sl_preview(preview_config)
-        
+
         return {
             "strategy_id": strategy_id,
             "strategy_name": info.name,
@@ -212,30 +221,32 @@ class StrategyManager:
             "requires_confirmation": True,
             "confirmation_message": "Review & Start Strategy",
         }
-    
+
     def _calculate_sl_preview(self, config: Dict) -> Dict:
         """Calculate SL preview information based on configuration."""
-        sl_percentage = config.get('sl_percentage', 60)
-        sl_limit_buffer = config.get('sl_limit_buffer', 5.0)
-        sl_enabled = config.get('sl_enabled', False)
-        
+        sl_percentage = config.get("sl_percentage", 60)
+        sl_limit_buffer = config.get("sl_limit_buffer", 5.0)
+        sl_enabled = config.get("sl_enabled", False)
+
         if not sl_enabled:
             return {
                 "enabled": False,
                 "message": "SL orders are disabled",
             }
-        
+
         examples = []
         for entry_price in [50.0, 100.0, 150.0, 200.0]:
             trigger_price = round(entry_price * (1 + sl_percentage / 100), 2)
             limit_price = round(trigger_price + sl_limit_buffer, 2)
-            examples.append({
-                "entry_price": entry_price,
-                "trigger_price": trigger_price,
-                "limit_price": limit_price,
-                "potential_loss_pct": sl_percentage,
-            })
-        
+            examples.append(
+                {
+                    "entry_price": entry_price,
+                    "trigger_price": trigger_price,
+                    "limit_price": limit_price,
+                    "potential_loss_pct": sl_percentage,
+                }
+            )
+
         return {
             "enabled": True,
             "sl_percentage": sl_percentage,
@@ -243,20 +254,23 @@ class StrategyManager:
             "example_calculations": examples,
             "message": f"SL will be placed at {sl_percentage}% above entry price for short positions",
         }
-    
+
     # ==================== Start/Stop Methods ====================
-    
-    def start(self, strategy_id: Optional[str] = None, 
-              config_override: Optional[Dict] = None, 
-              confirmed: bool = False) -> Dict:
+
+    def start(
+        self,
+        strategy_id: Optional[str] = None,
+        config_override: Optional[Dict] = None,
+        confirmed: bool = False,
+    ) -> Dict:
         """
         Start a strategy.
-        
+
         Args:
             strategy_id: The strategy to start (required for multi-strategy, optional for legacy)
             config_override: Optional config overrides
             confirmed: Whether user has confirmed the config
-            
+
         Returns:
             Dict with status and message
         """
@@ -268,18 +282,18 @@ class StrategyManager:
                 "message": f"Strategy '{current_id}' is already running. Stop it first.",
                 "requires_confirmation": False,
             }
-        
+
         if self._status == StrategyStatus.STARTING:
             return {
                 "success": False,
                 "message": "Strategy is already starting...",
                 "requires_confirmation": False,
             }
-        
+
         # Legacy mode: if no strategy_id provided, default to survivor
         if strategy_id is None:
             strategy_id = "survivor"
-        
+
         try:
             info = self._registry.get(strategy_id)
             if not info:
@@ -288,9 +302,9 @@ class StrategyManager:
                     "message": f"Unknown strategy: {strategy_id}",
                     "requires_confirmation": False,
                 }
-            
+
             instance = self._registry.create_instance(strategy_id, config_override)
-            
+
             if not confirmed:
                 preview = self.preview_strategy_config(strategy_id, config_override)
                 return {
@@ -299,29 +313,49 @@ class StrategyManager:
                     "requires_confirmation": True,
                     "preview": preview,
                 }
-            
+
             self._status = StrategyStatus.STARTING
             self._error_message = None
-            
+
             self._current_instance = instance
             self._registry.set_current_instance(instance)
-            
+
             self._state_queue = multiprocessing.Queue()
 
             self._process = multiprocessing.Process(
                 target=self._run_strategy_process,
-                args=(strategy_id, instance.config, self._state_queue)
+                args=(strategy_id, instance.config, self._state_queue),
             )
             self._process.start()
-            
+
             self._start_time = time.time()
             self._status = StrategyStatus.RUNNING
             instance.status = "RUNNING"
             instance.started_at = datetime.utcnow()
             instance.pid = self._process.pid
-            
+
+            # Start live data streaming
+            async def _start_live_data():
+                try:
+                    await live_data_manager.start_stream()
+                except Exception as e:
+                    logger.error(f"Failed to start live data stream: {e}")
+
+            asyncio.create_task(_start_live_data())
+
+            # Send Telegram notification
+            async def _notify_start():
+                try:
+                    await telegram_notifier.send_strategy_started(
+                        strategy_name=info.name, config=instance.config
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to send start notification: {e}")
+
+            asyncio.create_task(_notify_start())
+
             asyncio.create_task(self._monitor_state())
-            
+
             return {
                 "success": True,
                 "message": f"Strategy '{info.name}' started successfully",
@@ -330,7 +364,7 @@ class StrategyManager:
                 "pid": instance.pid,
                 "requires_confirmation": False,
             }
-            
+
         except ValueError as e:
             self._status = StrategyStatus.ERROR
             self._error_message = str(e)
@@ -348,75 +382,96 @@ class StrategyManager:
                 "message": f"Failed to start: {str(e)}",
                 "requires_confirmation": False,
             }
-    
+
     def stop(self) -> Dict:
         """Stop the currently running strategy."""
         if self._status == StrategyStatus.STOPPED:
             return {"success": True, "message": "Strategy already stopped"}
-        
+
         if self._status == StrategyStatus.STOPPING:
             return {"success": False, "message": "Strategy is already stopping..."}
-        
+
         try:
             self._status = StrategyStatus.STOPPING
-            
+
             if self._process and self._process.is_alive():
                 self._process.terminate()
                 self._process.join(timeout=10)
-                
+
                 if self._process.is_alive():
                     self._process.kill()
                     self._process.join()
-            
+
             if self._current_instance:
                 self._current_instance.status = "STOPPED"
                 self._current_instance.stopped_at = datetime.utcnow()
-            
+
+            # Stop live data streaming
+            async def _stop_live_data():
+                try:
+                    await live_data_manager.stop_stream()
+                except Exception as e:
+                    logger.error(f"Failed to stop live data stream: {e}")
+
+            asyncio.create_task(_stop_live_data())
+
+            # Send Telegram notification
+            async def _notify_stop():
+                try:
+                    if self._current_instance:
+                        await telegram_notifier.send_strategy_stopped(
+                            strategy_name=self._current_instance.strategy_type.value,
+                            reason="User initiated stop"
+                            if self._status != StrategyStatus.ERROR
+                            else "Error occurred",
+                        )
+                except Exception as e:
+                    logger.error(f"Failed to send stop notification: {e}")
+
+            asyncio.create_task(_notify_stop())
+
             self._cleanup()
-            
-            return {
-                "success": True,
-                "message": "Strategy stopped successfully"
-            }
-            
+
+            return {"success": True, "message": "Strategy stopped successfully"}
+
         except Exception as e:
             self._status = StrategyStatus.ERROR
             self._error_message = str(e)
-            return {
-                "success": False,
-                "message": f"Error stopping: {str(e)}"
-            }
-    
-    def restart(self, strategy_id: Optional[str] = None, 
-                config_override: Optional[Dict] = None, 
-                confirmed: bool = False) -> Dict:
+            return {"success": False, "message": f"Error stopping: {str(e)}"}
+
+    def restart(
+        self,
+        strategy_id: Optional[str] = None,
+        config_override: Optional[Dict] = None,
+        confirmed: bool = False,
+    ) -> Dict:
         """Restart strategy (optionally with different strategy/config)."""
         stop_result = self.stop()
         if not stop_result["success"]:
             return stop_result
-        
+
         time.sleep(1)
-        
+
         if strategy_id is None:
             if self._current_instance:
                 strategy_id = self._current_instance.strategy_type.value
             else:
                 strategy_id = "survivor"
-        
+
         return self.start(strategy_id, config_override, confirmed)
-    
+
     # ==================== State Methods ====================
-    
+
     def get_state(self) -> StrategyState:
         """Get current strategy state."""
         uptime = None
         if self._start_time and self._status == StrategyStatus.RUNNING:
             uptime = time.time() - self._start_time
-        
+
         current_strategy = "None"
         if self._current_instance:
             current_strategy = f"{self._current_instance.name} ({self._current_instance.strategy_type.value})"
-        
+
         return StrategyState(
             status=self._status,
             nifty_pe_last_value=self._nifty_pe_last_value,
@@ -429,25 +484,36 @@ class StrategyManager:
             current_strategy=current_strategy,
             instance_id=self._current_instance.id if self._current_instance else None,
         )
-    
+
     def get_current_strategy_info(self) -> Optional[Dict]:
         """Get info about currently running strategy."""
         if not self._current_instance:
             return None
-        
+
         return {
             "id": self._current_instance.id,
             "strategy_id": self._current_instance.strategy_type.value,
             "name": self._current_instance.name,
             "status": self._current_instance.status,
-            "started_at": self._current_instance.started_at.isoformat() if self._current_instance.started_at else None,
+            "started_at": self._current_instance.started_at.isoformat()
+            if self._current_instance.started_at
+            else None,
             "pid": self._current_instance.pid,
             "config_summary": {
-                k: v for k, v in self._current_instance.config.items()
-                if k in ['symbol_initials', 'pe_gap', 'ce_gap', 'pe_quantity', 'ce_quantity', 'entry_filter_type']
-            }
+                k: v
+                for k, v in self._current_instance.config.items()
+                if k
+                in [
+                    "symbol_initials",
+                    "pe_gap",
+                    "ce_gap",
+                    "pe_quantity",
+                    "ce_quantity",
+                    "entry_filter_type",
+                ]
+            },
         }
-    
+
     def _cleanup(self):
         """Clean up resources."""
         self._process = None
@@ -455,9 +521,9 @@ class StrategyManager:
         self._status = StrategyStatus.STOPPED
         self._start_time = None
         self._registry.clear_current_instance()
-    
+
     # ==================== Monitor Methods ====================
-    
+
     async def _monitor_state(self):
         """Monitor state updates from strategy process."""
         while self._status == StrategyStatus.RUNNING:
@@ -465,38 +531,56 @@ class StrategyManager:
                 if self._state_queue and not self._state_queue.empty():
                     update = self._state_queue.get_nowait()
                     self._process_state_update(update)
-                
+
                 await asyncio.sleep(0.1)
             except Exception as e:
                 print(f"[StrategyManager] State monitor error: {e}")
                 await asyncio.sleep(1)
-    
+
     def _process_state_update(self, update: Dict):
         """Process state update from strategy."""
-        if update.get('type') == 'STATE_UPDATE':
-            self._nifty_pe_last_value = update.get('nifty_pe_last_value')
-            self._nifty_ce_last_value = update.get('nifty_ce_last_value')
-            self._pe_reset_flag = update.get('pe_reset_flag', False)
-            self._ce_reset_flag = update.get('ce_reset_flag', False)
+        if update.get("type") == "STATE_UPDATE":
+            self._nifty_pe_last_value = update.get("nifty_pe_last_value")
+            self._nifty_ce_last_value = update.get("nifty_ce_last_value")
+            self._pe_reset_flag = update.get("pe_reset_flag", False)
+            self._ce_reset_flag = update.get("ce_reset_flag", False)
             self._last_update = datetime.utcnow()
-            
-        elif update.get('type') == 'ERROR':
-            error_msg = update.get('message', 'Unknown error')
+
+        elif update.get("type") == "ERROR":
+            error_msg = update.get("message", "Unknown error")
             self._error_message = error_msg
             self._status = StrategyStatus.ERROR
-            
+
             if self._current_instance:
                 self._current_instance.status = "ERROR"
                 self._current_instance.error_message = error_msg
-            
+
+            # Send Telegram notification for errors
+            async def _notify_error():
+                try:
+                    await telegram_notifier.send_error(
+                        error_message=error_msg,
+                        context=f"Strategy: {self._current_instance.strategy_type.value if self._current_instance else 'Unknown'}",
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to send error notification: {e}")
+
+            asyncio.create_task(_notify_error())
+
             # Auto-stop on critical errors
             insufficient_fund_keywords = [
-                'insufficient', 'margin', 'funds', 'balance',
-                'exposure', 'limit exceeded', 'not enough', 'margin shortfall'
+                "insufficient",
+                "margin",
+                "funds",
+                "balance",
+                "exposure",
+                "limit exceeded",
+                "not enough",
+                "margin shortfall",
             ]
             if any(kw in error_msg.lower() for kw in insufficient_fund_keywords):
                 self._stop_on_error(f"INSUFFICIENT FUNDS: {error_msg}")
-    
+
     def _stop_on_error(self, error_message: str):
         """Stop strategy due to error."""
         try:
@@ -506,17 +590,19 @@ class StrategyManager:
                 if self._process.is_alive():
                     self._process.kill()
                     self._process.join()
-            
+
             self._status = StrategyStatus.ERROR
             self._error_message = error_message
-            
+
         except Exception as e:
             print(f"[StrategyManager] Error in emergency stop: {e}")
-    
+
     # ==================== Strategy Process ====================
-    
+
     @staticmethod
-    def _run_strategy_process(strategy_id: str, config: Dict, state_queue: multiprocessing.Queue):
+    def _run_strategy_process(
+        strategy_id: str, config: Dict, state_queue: multiprocessing.Queue
+    ):
         """Run strategy in separate process."""
         try:
             from brokers import BrokerGateway
@@ -524,109 +610,143 @@ class StrategyManager:
             from orders import OrderTracker
             from queue import Queue
             from logger import setup_strategy_logging_with_name
-            
+
             logger = setup_strategy_logging_with_name(strategy_id)
             logger.info("=" * 70)
             logger.info(f"STARTING STRATEGY: {strategy_id}")
             logger.info("=" * 70)
-            
+
             registry = StrategyRegistry()
             strategy_class = registry.load_strategy_class(strategy_id)
-            
+
             broker_name = os.getenv("BROKER_NAME", "zerodha")
             broker = BrokerGateway.from_name(broker_name)
-            
+
             order_tracker = OrderTracker()
             dispatcher = DataDispatcher()
             dispatcher.register_main_queue(Queue())
-            
+
             logger.info(f"Initializing strategy: {strategy_id}")
             strategy = strategy_class(broker, config, order_tracker)
-            
+
             # Run SL reconciliation at startup
-            if hasattr(strategy, 'reconcile_sl_at_startup'):
+            if hasattr(strategy, "reconcile_sl_at_startup"):
                 logger.info("=" * 60)
                 logger.info("REVIEW & START STRATEGY - SL RECONCILIATION")
                 logger.info("=" * 60)
-                logger.info("Calculating SL levels for existing positions before placing orders...")
-                
+                logger.info(
+                    "Calculating SL levels for existing positions before placing orders..."
+                )
+
                 reconciliation_result = strategy.reconcile_sl_at_startup()
-                
+
                 if reconciliation_result:
                     logger.info(f"SL Reconciliation Complete:")
-                    logger.info(f"  - Total positions found: {reconciliation_result.total_positions}")
-                    logger.info(f"  - New SL orders placed: {reconciliation_result.new_sl_placed}")
+                    logger.info(
+                        f"  - Total positions found: {reconciliation_result.total_positions}"
+                    )
+                    logger.info(
+                        f"  - New SL orders placed: {reconciliation_result.new_sl_placed}"
+                    )
                     logger.info(f"  - Errors: {len(reconciliation_result.errors)}")
-                    
-                    state_queue.put({
-                        'type': 'SL_RECONCILIATION',
-                        'total_positions': reconciliation_result.total_positions,
-                        'new_sl_placed': reconciliation_result.new_sl_placed,
-                        'errors': reconciliation_result.errors,
-                    })
+
+                    state_queue.put(
+                        {
+                            "type": "SL_RECONCILIATION",
+                            "total_positions": reconciliation_result.total_positions,
+                            "new_sl_placed": reconciliation_result.new_sl_placed,
+                            "errors": reconciliation_result.errors,
+                        }
+                    )
                 else:
-                    logger.info("SL reconciliation skipped (not enabled or not applicable)")
-            
+                    logger.info(
+                        "SL reconciliation skipped (not enabled or not applicable)"
+                    )
+
             # Initialize positions from broker for profit tracking
-            enable_position_init = config.get('enable_position_init', True)
-            if hasattr(strategy, 'initialize_positions_from_broker') and enable_position_init:
+            enable_position_init = config.get("enable_position_init", True)
+            if (
+                hasattr(strategy, "initialize_positions_from_broker")
+                and enable_position_init
+            ):
                 logger.info("=" * 60)
                 logger.info("POSITION INITIALIZATION FROM BROKER")
                 logger.info("=" * 60)
-                logger.info("Loading existing positions from broker for profit target tracking...")
-                
+                logger.info(
+                    "Loading existing positions from broker for profit target tracking..."
+                )
+
                 try:
                     initialized_count = strategy.initialize_positions_from_broker()
-                    
+
                     if initialized_count > 0:
                         logger.info(f"Position Initialization Complete:")
                         logger.info(f"  - Positions initialized: {initialized_count}")
-                        logger.info(f"  - Total positions now tracked: {len(strategy.positions)}")
-                        
-                        state_queue.put({
-                            'type': 'POSITION_INIT',
-                            'initialized_count': initialized_count,
-                            'total_tracked': len(strategy.positions),
-                        })
+                        logger.info(
+                            f"  - Total positions now tracked: {len(strategy.positions)}"
+                        )
+
+                        state_queue.put(
+                            {
+                                "type": "POSITION_INIT",
+                                "initialized_count": initialized_count,
+                                "total_tracked": len(strategy.positions),
+                            }
+                        )
                     else:
                         logger.info("No existing positions found in broker account")
                 except Exception as e:
-                    logger.error(f"Error initializing positions from broker: {e}", exc_info=True)
+                    logger.error(
+                        f"Error initializing positions from broker: {e}", exc_info=True
+                    )
             elif not enable_position_init:
-                logger.info("Position initialization disabled (enable_position_init=false)")
-            
+                logger.info(
+                    "Position initialization disabled (enable_position_init=false)"
+                )
+
             # Check profit targets at startup
-            if hasattr(strategy, 'check_profit_targets_at_startup') and enable_position_init:
+            if (
+                hasattr(strategy, "check_profit_targets_at_startup")
+                and enable_position_init
+            ):
                 logger.info("=" * 60)
                 logger.info("PROFIT TARGET CHECK AT STARTUP")
                 logger.info("=" * 60)
-                logger.info("Checking if any existing positions have hit profit targets...")
-                
+                logger.info(
+                    "Checking if any existing positions have hit profit targets..."
+                )
+
                 try:
                     profit_check_result = strategy.check_profit_targets_at_startup()
-                    
+
                     if profit_check_result and len(profit_check_result) > 0:
                         logger.info(f"Profit Target Check Complete:")
                         logger.info(f"  - Positions exited: {len(profit_check_result)}")
-                        
-                        state_queue.put({
-                            'type': 'PROFIT_CHECK',
-                            'positions_exited': len(profit_check_result),
-                        })
+
+                        state_queue.put(
+                            {
+                                "type": "PROFIT_CHECK",
+                                "positions_exited": len(profit_check_result),
+                            }
+                        )
                     else:
                         logger.info("No positions hit profit target at startup")
                 except Exception as e:
-                    logger.error(f"Error checking profit targets at startup: {e}", exc_info=True)
-            
+                    logger.error(
+                        f"Error checking profit targets at startup: {e}", exc_info=True
+                    )
+
             # Send initial state
-            state_queue.put({
-                'type': 'STATE_UPDATE',
-                'nifty_pe_last_value': getattr(strategy, 'nifty_pe_last_value', 0),
-                'nifty_ce_last_value': getattr(strategy, 'nifty_ce_last_value', 0),
-                'pe_reset_flag': getattr(strategy, 'pe_reset_gap_flag', False),
-                'ce_reset_flag': getattr(strategy, 'ce_reset_gap_flag', False),
-            })
-            
+            state_queue.put(
+                {
+                    "type": "STATE_UPDATE",
+                    "nifty_pe_last_value": getattr(strategy, "nifty_pe_last_value", 0),
+                    "nifty_ce_last_value": getattr(strategy, "nifty_ce_last_value", 0),
+                    "pe_reset_flag": getattr(strategy, "pe_reset_gap_flag", False),
+                    "ce_reset_flag": getattr(strategy, "ce_reset_gap_flag", False),
+                }
+            )
+
             # WebSocket callbacks
             def on_ticks(ws, ticks):
                 if isinstance(ticks, list):
@@ -634,57 +754,63 @@ class StrategyManager:
                 else:
                     if "symbol" in ticks:
                         dispatcher.dispatch(ticks)
-            
+
             def on_connect(ws, response):
                 logger.info(f"WebSocket connected: {response}")
-            
+
             def on_order_update(ws, data):
                 logger.info(f"Order update: {data}")
-            
+
             # Connect WebSocket
             broker.connect_websocket(on_ticks=on_ticks, on_connect=on_connect)
-            broker.symbols_to_subscribe([config.get('index_symbol', 'NSE:NIFTY 50')])
+            broker.symbols_to_subscribe([config.get("index_symbol", "NSE:NIFTY 50")])
             broker.connect_order_websocket(on_order_update=on_order_update)
-            
+
             logger.info("Strategy started, entering main loop")
-            
+
             # Main loop
             while True:
                 try:
                     tick_data = dispatcher._main_queue.get(timeout=1)
-                    
+
                     if isinstance(tick_data, list):
                         symbol_data = tick_data[0]
                     else:
                         symbol_data = tick_data
-                    
-                    if isinstance(symbol_data, dict) and ('last_price' in symbol_data or 'ltp' in symbol_data):
+
+                    if isinstance(symbol_data, dict) and (
+                        "last_price" in symbol_data or "ltp" in symbol_data
+                    ):
                         strategy.on_ticks_update(symbol_data)
-                        
-                        state_queue.put({
-                            'type': 'STATE_UPDATE',
-                            'nifty_pe_last_value': getattr(strategy, 'nifty_pe_last_value', 0),
-                            'nifty_ce_last_value': getattr(strategy, 'nifty_ce_last_value', 0),
-                            'pe_reset_flag': getattr(strategy, 'pe_reset_gap_flag', False),
-                            'ce_reset_flag': getattr(strategy, 'ce_reset_gap_flag', False),
-                        })
-                        
+
+                        state_queue.put(
+                            {
+                                "type": "STATE_UPDATE",
+                                "nifty_pe_last_value": getattr(
+                                    strategy, "nifty_pe_last_value", 0
+                                ),
+                                "nifty_ce_last_value": getattr(
+                                    strategy, "nifty_ce_last_value", 0
+                                ),
+                                "pe_reset_flag": getattr(
+                                    strategy, "pe_reset_gap_flag", False
+                                ),
+                                "ce_reset_flag": getattr(
+                                    strategy, "ce_reset_gap_flag", False
+                                ),
+                            }
+                        )
+
                 except Exception as e:
                     if "empty" not in str(e).lower():
                         logger.error(f"Error in main loop: {e}")
-                        state_queue.put({
-                            'type': 'ERROR',
-                            'message': str(e)
-                        })
-                        
+                        state_queue.put({"type": "ERROR", "message": str(e)})
+
         except Exception as e:
             error_msg = f"Strategy process error: {str(e)}"
             print(error_msg)
             traceback.print_exc()
-            state_queue.put({
-                'type': 'ERROR',
-                'message': error_msg
-            })
+            state_queue.put({"type": "ERROR", "message": error_msg})
 
 
 # Global strategy manager instance

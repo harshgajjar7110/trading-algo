@@ -1,0 +1,162 @@
+
+╔══════════════════════════════════════════════════════════════════════════════╗
+║          GAP RISK MANAGEMENT - QUICK REFERENCE CARD                          ║
+║                    Unhedged Option Selling - Nifty 50                        ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📊 MONDAY GAP STATISTICS (Nifty 50)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Gap > 0.5%:  ~45% of Mondays
+Gap > 1.0%:  ~22% of Mondays  ← You will face this 1 in 5 Mondays
+Gap > 1.5%:  ~10% of Mondays
+Gap > 2.0%:  ~4% of Mondays
+
+⚠️  A 1% gap against you can erase WEEKS of profits in 1 second
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📅 DAY-BASED POSITION SIZE RULES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Day         | Multiplier | Max Lots | Overnight | Notes
+────────────┼────────────┼──────────┼───────────┼─────────────────
+Monday      |    0.5x    |   50%    |    NO     | Wait 45min after open
+Tuesday     |    1.0x    |  100%    |   Yes     | Normal trading
+Wednesday   |    1.0x    |  100%    |   Yes     | Normal trading
+Thursday    |    0.75x   |   75%    |    NO     | Expiry day - intraday only
+Friday      |    0.4x    |   40%    |    NO     | Close by 3:15 PM
+Pre-Holiday |    0.3x    |   30%    |    NO     | No overnight holds
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📏 GAP SIZE ACTION PROTOCOL
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Gap Size      | Action                  | Position | Buffer Add
+──────────────┼─────────────────────────┼──────────┼───────────
+< 0.5%        | Trade Normally          |  100%    | Standard
+0.5% - 1.0%   | Wait 30min, then decide |   50%    | +0.5%
+1.0% - 1.5%   | 0DTE only or SKIP       |   25%    | +1.0%
+> 1.5%        | NO TRADING              |    0%    | N/A
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🎯 STRIKE SELECTION MODIFICATIONS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+NORMAL DAY (Nifty @ 24500, DTE=5):
+  Call = POC + (Spot × 2.0%) = ~24,990
+  Put  = POC - (Spot × 2.0%) = ~24,010
+
+MONDAY (Gap Risk):
+  Call = POC + (Spot × 2.5%) = ~25,110  (+0.5% buffer)
+  Put  = POC - (Spot × 2.5%) = ~23,890  (+0.5% buffer)
+
+POST-GAP >1%:
+  Call = POC + (Spot × 3.0%) = ~25,240  (+1.0% buffer)
+  Put  = POC - (Spot × 3.0%) = ~23,760  (+1.0% buffer)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+⏰ MONDAY TRADING PROTOCOL
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+8:00 AM  → Check GIFT Nifty (Singapore)
+9:15 AM  → DO NOT ENTER - Observe only
+9:15 AM  → Note gap size and direction
+9:15 AM  → Watch for gap fill or continuation
+10:00 AM → DECISION TIME:
+            Gap < 0.5%  → Trade with 50% size
+            Gap 0.5-1%  → Trade with 25% size
+            Gap > 1%    → SKIP DAY
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🚨 POST-GAP EXIT RULES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+IF Strike becomes ITM or ATM after gap:
+  → EXIT IMMEDIATELY (market order if needed)
+  → Do not hope for recovery
+  → Accept the loss
+
+IF Strike still OTM but within 0.5%:
+  → Monitor for 15-30 minutes
+  → If continues against you → EXIT
+  → If stabilizes → Tighten stop to 1%
+
+IF Strike still OTM (>1% away):
+  → Hold but monitor closely
+  → Set alert at 0.5% from strike
+  → Be ready to exit
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📋 FRIDAY 3:00 PM EXIT CHECKLIST
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Before holding overnight into weekend:
+
+[ ] Premium captured > 50%? → CLOSE, take profits
+[ ] Spot within 0.5% of strike? → CLOSE, too risky
+[ ] Major event this weekend? → CLOSE, event risk
+[ ] GIFT Nifty > 0.5% away? → CLOSE or ADJUST
+[ ] VIX > 20? → CLOSE, high volatility
+[ ] Any strike threatened? → CLOSE, protect capital
+
+IF ANY CHECKBOX IS YES → CLOSE POSITION
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📈 GAP-RISK POSITION SIZING FORMULA
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Standard:     Lots = (Capital × Risk%) / (Stop × Lot Size)
+
+Gap-Adjusted: Adjusted Risk% = Standard Risk% / Gap-Risk Factor
+              Gap-Risk Factor = 1 + (Expected Gap% × 2)
+
+Example (Monday):
+Capital = Rs.500,000 | Standard Risk = 2% | Expected Gap = 1%
+Gap-Risk Factor = 1 + (0.01 × 2) = 1.2
+Adjusted Risk% = 2% / 1.2 = 1.67%
+Adjusted Lots = (500,000 × 1.67%) / (100 × 25) = 3.3 → 3 lots
+
+Result: 25% reduction in position size
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+💡 ALTERNATIVES TO AVOID GAP RISK
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1. INTRADAY-ONLY:
+   - Enter 10:00 AM - 11:00 AM
+   - Exit 2:30 PM - 3:00 PM
+   - No overnight risk
+   - Sleep peacefully on weekends
+
+2. IRON CONDOR (Hedged):
+   - Max loss DEFINED
+   - Gap of 2% = loss of Rs.100 (not Rs.500+)
+   - Lower margin requirement
+
+3. SKIP MONDAYS:
+   - Close Friday 3:15 PM
+   - No new positions until Tuesday 10:00 AM
+   - Eliminates 80% of gap risk
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+⚠️ TOP 10 GAP RISK RULES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1. Gaps are the #1 killer of unhedged option sellers
+2. Monday = highest gap risk day
+3. Never hold unhedged positions over weekend if possible
+4. Check GIFT Nifty before holding overnight
+5. Reduce position size by 50% on Mondays
+6. Use wider strikes (+0.5% buffer) on gap-risk days
+7. If gap >1%, skip trading for the day
+8. If strike becomes ITM after gap, EXIT immediately
+9. Consider intraday-only to eliminate gap risk
+10. Consider iron condors to cap gap losses
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+REMEMBER: You cannot predict gaps, but you can PREPARE for them.
+          Preservation of capital > Capturing every theta penny.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

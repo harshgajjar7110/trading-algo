@@ -1,6 +1,24 @@
 import os, sys
 import logging
 import logging.handlers
+import warnings
+
+# DEPRECATION NOTICE:
+# This module is maintained for backward compatibility.
+# For new code, please use the unified logging utility:
+#   from utils.logging import get_logger, get_strategy_logger
+#
+# The unified logger provides:
+# - Consistent log formatting across all modules
+# - Automatic logger caching to prevent duplicate handlers
+# - Better separation of concerns
+
+# Show deprecation warning once
+warnings.warn(
+    "The logger module is deprecated. Use utils.logging for new code.",
+    DeprecationWarning,
+    stacklevel=2
+)
 
 
 def setup_logging():

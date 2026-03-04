@@ -8,8 +8,32 @@ import pandas as pd
 import numpy as np
 import json
 from datetime import datetime, timedelta
+from collections import deque, namedtuple
+from typing import Dict, List, Optional, Any
 from logger import logger
 from brokers import BrokerGateway, OrderRequest, Exchange, OrderType, TransactionType, ProductType
+
+# Memory-efficient candle storage using __slots__
+class Candle:
+    """Memory-efficient candle storage using __slots__ instead of dict."""
+    __slots__ = ['ts', 'open', 'high', 'low', 'close']
+    
+    def __init__(self, ts: float, open_price: float, high: float, low: float, close: float):
+        self.ts = ts
+        self.open = open_price
+        self.high = high
+        self.low = low
+        self.close = close
+    
+    def to_dict(self) -> Dict[str, float]:
+        """Convert to dict for indicator calculations."""
+        return {
+            'ts': self.ts,
+            'open': self.open,
+            'high': self.high,
+            'low': self.low,
+            'close': self.close
+        }
 
 class SurvivorStrategy:
     """
@@ -91,24 +115,54 @@ class SurvivorStrategy:
         self.symbol_initials = self.strat_var_symbol_initials
         self.order_tracker = order_tracker  # Store OrderTracker
         self.broker.download_instruments()
-        self.instruments = self.broker.get_instruments()
-        self.instruments = self.instruments[self.instruments['symbol'].str.contains(self.symbol_initials)]
+        
+        # Build lightweight instrument cache from DataFrame, then free the DataFrame
+        instruments_df = self.broker.get_instruments()
+        filtered_df = instruments_df[instruments_df['symbol'].str.contains(self.symbol_initials)]
 
-        if self.instruments.shape[0] == 0:
+        if filtered_df.shape[0] == 0:
             logger.error(f"No instruments found for {self.symbol_initials}")
             logger.error(f"Instrument {self.symbol_initials} not found. Please check the symbol initials")
             raise ValueError(f"No instruments found for {self.symbol_initials}. Cannot initialize SurvivorStrategy.")
         
-        self.strike_difference = None      
-        self._initialize_state()
-        self.lot_size = self.instruments['lot_size'].iloc[0]
+        # Build memory-efficient caches
+        self._instrument_cache: Dict[str, Dict[str, Any]] = {}
+        self._strike_index: Dict[str, Dict[float, str]] = {'CE': {}, 'PE': {}}
         
-        # Calculate and store strike difference for the option series
-        self.strike_difference = self._get_strike_difference(self.symbol_initials)
+        for _, row in filtered_df.iterrows():
+            symbol = row['symbol']
+            inst_type = row.get('instrument_type', '')
+            strike = row.get('strike', 0)
+            
+            # Store minimal fields needed for trading
+            self._instrument_cache[symbol] = {
+                'symbol': symbol,
+                'strike': strike,
+                'instrument_type': inst_type,
+                'lot_size': row.get('lot_size', 0),
+                'segment': row.get('segment', ''),
+                'instrument_token': row.get('instrument_token', 0),
+            }
+            
+            # Build strike-indexed lookup for O(1) strike selection
+            if inst_type in ('CE', 'PE') and strike:
+                self._strike_index[inst_type][strike] = symbol
+        
+        # Get lot_size from first instrument (all should be same for option series)
+        self.lot_size = int(filtered_df['lot_size'].iloc[0])
+        
+        # Calculate strike difference using the lightweight cache
+        self.strike_difference = self._calculate_strike_difference()
         logger.info(f"Strike difference for {self.symbol_initials} is {self.strike_difference}")
+        
+        # Free DataFrame memory - no longer needed
+        del instruments_df, filtered_df
+        
+        self._initialize_state()
 
-        # Initialize Historical Data for Indicators
-        self.history_data = [] # List of minute candles
+        # Initialize Historical Data for Indicators - use deque with maxlen for O(1) eviction
+        max_history = getattr(self, 'strat_var_max_history_size', 2000)
+        self.history_data: deque = deque(maxlen=max_history)
         self.last_indicators = {} # Cache for logging
         self.last_minute_processed = None
         self._fetch_initial_history()
@@ -136,27 +190,24 @@ class SurvivorStrategy:
             )
 
             if history:
-                # Normalize history data
-                # Zerodha/Kite Connect typically returns 'date' (datetime obj) or 'ts' (in driver normalization)
-                # Our driver implementation in `brokers/integrations/zerodha/driver.py` already normalizes history to:
-                # { "ts": int_timestamp, "close": float, ... }
-                # So we just need to ensure we don't break if 'date' is present but 'ts' isn't (though driver ensures 'ts').
-
-                normalized_history = []
+                # Convert history to Candle objects for memory efficiency
                 for candle in history:
-                    if 'ts' not in candle:
-                        # Fallback if driver didn't normalize (shouldn't happen with our driver but good for safety)
-                        dt = candle.get('date')
-                        if dt:
-                            if hasattr(dt, 'timestamp'):
-                                candle['ts'] = int(dt.timestamp())
-                            else:
-                                # String parsing fallback if needed, but unlikely given driver
-                                pass
-                    normalized_history.append(candle)
+                    ts = candle.get('ts')
+                    if ts is None and 'date' in candle:
+                        dt = candle['date']
+                        if hasattr(dt, 'timestamp'):
+                            ts = int(dt.timestamp())
+                    
+                    if ts is not None:
+                        self.history_data.append(Candle(
+                            ts=float(ts),
+                            open_price=float(candle.get('open', candle.get('close', 0))),
+                            high=float(candle.get('high', candle.get('close', 0))),
+                            low=float(candle.get('low', candle.get('close', 0))),
+                            close=float(candle.get('close', 0))
+                        ))
 
-                self.history_data = normalized_history
-                logger.info(f"Loaded {len(normalized_history)} historical candles.")
+                logger.info(f"Loaded {len(self.history_data)} historical candles.")
             else:
                 logger.warning("No historical data returned.")
 
@@ -164,12 +215,7 @@ class SurvivorStrategy:
             logger.error(f"Error fetching historical data: {e}")
 
     def _update_history(self, current_price, current_ts=None):
-        """Update history with current tick, managing candle formation (simplified rolling)."""
-        # For simplicity in this event-driven architecture without strict candle management,
-        # we will append the current tick as a 'close' if enough time has passed, or
-        # just maintain a list of closes.
-        # A robust way is to detect minute change.
-
+        """Update history with current tick using memory-efficient Candle objects."""
         if not current_ts:
             current_ts = datetime.now().timestamp()
 
@@ -178,49 +224,44 @@ class SurvivorStrategy:
 
         # If history is empty, start a new candle
         if not self.history_data:
-            self.history_data.append({
-                'ts': current_minute.timestamp(),
-                'close': current_price,
-                'high': current_price,
-                'low': current_price,
-                'open': current_price
-            })
+            self.history_data.append(Candle(
+                ts=current_minute.timestamp(),
+                open_price=current_price,
+                high=current_price,
+                low=current_price,
+                close=current_price
+            ))
             self.last_minute_processed = current_minute
             return
 
         last_candle = self.history_data[-1]
-        last_candle_ts = last_candle.get('ts')
-
-        if not last_candle_ts:
-             # Should not happen if data is clean
-             return
-
-        last_candle_dt = datetime.fromtimestamp(last_candle_ts)
+        
+        last_candle_dt = datetime.fromtimestamp(last_candle.ts)
 
         if current_minute > last_candle_dt:
-             # New minute started, finalize previous and start new
-             self.history_data.append({
-                'ts': current_minute.timestamp(),
-                'close': current_price,
-                'high': current_price,
-                'low': current_price,
-                'open': current_price
-            })
-             # Keep history manageable (e.g., last 2000 candles)
-             if len(self.history_data) > 2000:
-                 self.history_data.pop(0)
+            # New minute started, finalize previous and start new
+            self.history_data.append(Candle(
+                ts=current_minute.timestamp(),
+                open_price=current_price,
+                high=current_price,
+                low=current_price,
+                close=current_price
+            ))
+            # Deque automatically handles maxlen eviction - no manual pop needed!
         else:
             # Update current candle
-            self.history_data[-1]['close'] = current_price
-            self.history_data[-1]['high'] = max(self.history_data[-1]['high'], current_price)
-            self.history_data[-1]['low'] = min(self.history_data[-1]['low'], current_price)
+            last_candle.close = current_price
+            last_candle.high = max(last_candle.high, current_price)
+            last_candle.low = min(last_candle.low, current_price)
 
     def _calculate_indicators(self):
-        """Calculate RSI, ADX, EMA on self.history_data."""
+        """Calculate RSI, ADX, EMA on self.history_data using Candle objects."""
         if len(self.history_data) < 50: # Need enough data
             return None
 
-        df = pd.DataFrame(self.history_data)
+        # Convert deque of Candle objects to DataFrame
+        # Use list comprehension for efficiency
+        df = pd.DataFrame([c.to_dict() for c in self.history_data])
 
         results = {}
 
@@ -356,25 +397,27 @@ class SurvivorStrategy:
         logger.info(f"Nifty PE Start Value during initialization: {self.nifty_pe_last_value}, "
                    f"Nifty CE Start Value during initialization: {self.nifty_ce_last_value}")
 
-    def _get_strike_difference(self, symbol_initials):
+    def _get_strike_difference(self, symbol_initials=None):
+        """Get the strike difference using the lightweight cache."""
         if self.strike_difference is not None:
             return self.strike_difference
-            
-        # Filter for CE instruments to calculate strike difference 
-        ce_instruments = self.instruments[
-            self.instruments['symbol'].str.contains(symbol_initials) & 
-            self.instruments['symbol'].str.endswith('CE')
-        ]
+        return self._calculate_strike_difference()
+    
+    def _calculate_strike_difference(self) -> int:
+        """Calculate strike difference using lightweight instrument cache."""
+        # Get all CE strikes from cache
+        ce_strikes = sorted([
+            info['strike']
+            for info in self._instrument_cache.values()
+            if info['instrument_type'] == 'CE' and info['strike'] > 0
+        ])
         
-        if ce_instruments.shape[0] < 2:
-            logger.error(f"Not enough CE instruments found for {symbol_initials} to calculate strike difference")
-            return 0
-        # Sort by strike
-        ce_instruments_sorted = ce_instruments.sort_values('strike')
-        # Take the top 2
-        top2 = ce_instruments_sorted.head(2)
-        # Calculate the difference
-        self.strike_difference = abs(top2.iloc[1]['strike'] - top2.iloc[0]['strike'])
+        if len(ce_strikes) < 2:
+            logger.error(f"Not enough CE instruments found to calculate strike difference")
+            return 50  # Default fallback
+        
+        # Calculate difference between first two unique strikes
+        self.strike_difference = int(abs(ce_strikes[1] - ce_strikes[0]))
         return self.strike_difference
 
     def on_ticks_update(self, ticks):
@@ -645,7 +688,8 @@ class SurvivorStrategy:
 
     def _find_nifty_symbol_from_gap(self, option_type, ltp, gap):
         """
-        Find the most suitable option instrument based on strike distance from current price
+        Find the most suitable option instrument based on strike distance from current price.
+        Uses strike-indexed cache for O(1) lookups instead of DataFrame filtering.
         
         Args:
             option_type (str): 'PE' or 'CE' - type of option to find
@@ -654,58 +698,52 @@ class SurvivorStrategy:
             
         Returns:
             dict: Instrument details including symbol, strike, etc., or None if not found
-            
-        Strike Selection Logic:
-        1. For PE: target_strike = ltp - gap (out-of-the-money puts)
-        2. For CE: target_strike = ltp + gap (out-of-the-money calls)
-        3. Find closest available strike within half strike difference tolerance
-        4. Return the best match
-        
-        Example:
-        - LTP: 24,500, Gap: 200, Option Type: PE
-        - Target Strike: 24,300
-        - Find closest available strike to 24,300 (e.g., 24,300 or 24,250)
-        
-        Filtering Criteria:
-        - Must match symbol_initials (correct expiry series)
-        - Must be the correct option type (PE/CE)
-        - Must be in NFO-OPT segment
-        - Must be within acceptable strike range
         """
-        # Convert gap to symbol_gap based on option type
-        if option_type == "PE":
-            symbol_gap = -gap  # Negative for PE (below current price)
-        else:
-            symbol_gap = gap   # Positive for CE (above current price)
-            
         # Calculate target strike price
-        target_strike = ltp + symbol_gap
+        if option_type == "PE":
+            target_strike = ltp - gap  # Below current price for PE
+        else:
+            target_strike = ltp + gap  # Above current price for CE
         
-        # Filter instruments for matching criteria
-        df = self.instruments[
-            (self.instruments['symbol'].str.contains(self.strat_var_symbol_initials)) &
-            (self.instruments['instrument_type'] == option_type) &
-            (self.instruments['segment'] == "NFO-OPT")
-        ]
-        
-        if df.empty:
+        # Use strike index for O(1) lookup
+        strike_index = self._strike_index.get(option_type, {})
+        if not strike_index:
             return None
-            
-        # Find closest strike within acceptable tolerance
-        df['target_strike_diff'] = (df['strike'] - target_strike).abs()
         
-        # Filter to strikes within half strike difference (tolerance for rounding)
-        tolerance = self._get_strike_difference(self.strat_var_symbol_initials) / 2
-        df = df[df['target_strike_diff'] <= tolerance]
+        # Find the closest available strike
+        available_strikes = sorted(strike_index.keys())
+        if not available_strikes:
+            return None
         
-        if df.empty:
+        # Binary search for closest strike
+        closest_strike = self._find_closest_strike(available_strikes, target_strike)
+        
+        # Check tolerance
+        tolerance = self.strike_difference / 2
+        if abs(closest_strike - target_strike) > tolerance:
             logger.error(f"No instrument found for {self.strat_var_symbol_initials} {option_type} "
                         f"within {tolerance} of {target_strike}")
             return None
-            
-        # Return the closest match
-        best = df.sort_values('target_strike_diff').iloc[0]
-        return best.to_dict()
+        
+        # Return instrument from cache
+        symbol = strike_index[closest_strike]
+        return self._instrument_cache.get(symbol)
+    
+    def _find_closest_strike(self, sorted_strikes: List[float], target: float) -> float:
+        """Find closest strike using binary search."""
+        from bisect import bisect_left
+        
+        pos = bisect_left(sorted_strikes, target)
+        
+        if pos == 0:
+            return sorted_strikes[0]
+        if pos == len(sorted_strikes):
+            return sorted_strikes[-1]
+        
+        before = sorted_strikes[pos - 1]
+        after = sorted_strikes[pos]
+        
+        return after if (after - target) < (target - before) else before
 
     def _find_price_eligible_symbol(self, option_type):
         """
@@ -733,9 +771,7 @@ class SurvivorStrategy:
             ltp = self._nifty_quote().last_price
             
             # Find instrument at current gap
-            instrument = self._find_nifty_symbol_from_gap(
-                self.instruments, self.strat_var_symbol_initials, temp_gap, option_type, ltp, self.lot_size
-            )
+            instrument = self._find_nifty_symbol_from_gap(option_type, ltp, temp_gap)
             
             if instrument is None:
                 return None

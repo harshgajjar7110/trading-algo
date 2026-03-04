@@ -30,7 +30,7 @@ default:
   # Option series identifier - must match current trading option series
   # Format: NIFTY + expiry date (e.g., NIFTY25807 for 25th Jan 2025, 07th strike series)
   # This identifies which specific option expiry series to trade
-  symbol_initials: "NIFTY26FEB24" # "NIFTY25807"
+  symbol_initials: "NIFTY26317" # "NIFTY25807"
   
   # ========================================================================
   # GAP PARAMETERS - TRADE TRIGGERING THRESHOLDS
@@ -40,13 +40,13 @@ default:
   # When NIFTY rises by this many points above the PE reference value, 
   # the strategy will sell PE options
   # Example: If pe_gap=20 and NIFTY moves up 25 points, PE trade is triggered
-  pe_gap: 40
+  pe_gap: 50
   
   # Price movement threshold to trigger CE (Call) option sells  
   # When NIFTY falls by this many points below the CE reference value,
   # the strategy will sell CE options
   # Example: If ce_gap=20 and NIFTY moves down 25 points, CE trade is triggered
-  ce_gap: 40
+  ce_gap: 50
   
   # ========================================================================
   # POSITION SIZING PARAMETERS
@@ -114,13 +114,13 @@ default:
   # If 0: Uses current NIFTY price as starting reference
   # If specified: Uses that value as starting reference for PE tracking
   # Example: pe_start_point=24500 starts PE tracking from 24500
-  pe_start_point: 25859
+  pe_start_point: 24550
   
   # Initial CE reference value (0 = use current market price)
   # If 0: Uses current NIFTY price as starting reference  
   # If specified: Uses that value as starting reference for CE tracking
   # Example: ce_start_point=24500 starts CE tracking from 24500
-  ce_start_point: 25859
+  ce_start_point: 24500
   
   # ========================================================================
   # ORDER EXECUTION PARAMETERS

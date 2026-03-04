@@ -221,6 +221,7 @@ class PositionsResponse(BaseModel):
     total_pnl: float
     total_pnl_percent: float
     error: Optional[str] = None  # Error message if positions couldn't be fetched
+    message: Optional[str] = None  # Info message about the data source
 
 
 # =============================================================================
@@ -466,3 +467,152 @@ class ScenarioAnalysis(BaseModel):
     scenarios: List[ScenarioResult]
     underlying_price: float
     days_forward: int
+
+
+# =============================================================================
+# Visual Engine Models
+# =============================================================================
+
+class FilterType(str, Enum):
+    """Types of entry filters."""
+    RSI = "RSI"
+    EMA = "EMA"
+    ADX = "ADX"
+    TREND = "TREND"
+    GAP = "GAP"
+
+
+class FilterStatusType(str, Enum):
+    """Status of a filter check."""
+    PASS = "PASS"
+    FAIL = "FAIL"
+    PENDING = "PENDING"
+    BLOCKED = "BLOCKED"
+    DISABLED = "DISABLED"
+
+
+class PredictionStatus(str, Enum):
+    """Status of entry prediction."""
+    READY = "READY"
+    WAITING = "WAITING"
+    BLOCKED = "BLOCKED"
+    COOLDOWN = "COOLDOWN"
+
+
+class TrendDirection(str, Enum):
+    """Market trend direction."""
+    BULLISH = "BULLISH"
+    BEARISH = "BEARISH"
+    NEUTRAL = "NEUTRAL"
+
+
+class VolatilityRegime(str, Enum):
+    """Volatility classification."""
+    LOW = "LOW"
+    NORMAL = "NORMAL"
+    HIGH = "HIGH"
+
+
+class SignalType(str, Enum):
+    """Type of trading signal."""
+    ENTRY = "ENTRY"
+    REJECTION = "REJECTION"
+    EXIT = "EXIT"
+
+
+class FilterStatus(BaseModel):
+    """Status of an individual entry filter."""
+    name: str
+    type: FilterType
+    enabled: bool
+    current_value: Optional[float] = None
+    current_value_str: Optional[str] = None
+    threshold: Optional[float] = None
+    threshold_str: Optional[str] = None
+    status: FilterStatusType
+    message: str
+
+
+class EntryPrediction(BaseModel):
+    """Prediction for entry on a specific side (PE/CE)."""
+    side: str  # "PE" or "CE"
+    status: PredictionStatus
+    current_price: Optional[float] = None
+    trigger_price: Optional[float] = None
+    distance_to_trigger: Optional[float] = None
+    distance_percent: Optional[float] = None
+    estimated_time: Optional[str] = None
+    blocking_reasons: List[str] = []
+    next_check: Optional[datetime] = None
+
+
+class EntrySignal(BaseModel):
+    """A trading signal (entry, rejection, or exit)."""
+    timestamp: datetime
+    side: str  # "PE" or "CE"
+    type: SignalType
+    price: float
+    reason: str
+    filters_passed: List[str] = []
+    filters_failed: List[str] = []
+
+
+class GapAssessment(BaseModel):
+    """Gap risk assessment."""
+    can_trade: bool
+    message: str
+    gap_percent: Optional[float] = None
+    threshold_percent: Optional[float] = None
+
+
+class MarketContext(BaseModel):
+    """Current market context."""
+    nifty_price: Optional[float] = None
+    trend: TrendDirection = TrendDirection.NEUTRAL
+    volatility_regime: VolatilityRegime = VolatilityRegime.NORMAL
+    atr_value: Optional[float] = None
+    gap_assessment: GapAssessment
+
+
+class DailyStats(BaseModel):
+    """Daily trading statistics."""
+    trades_taken: int = 0
+    trades_rejected: int = 0
+    pnl: float = 0.0
+    consecutive_losses: int = 0
+
+
+class StrategyVisualState(BaseModel):
+    """Complete visual state for the strategy dashboard."""
+    # Algo Status
+    is_running: bool
+    uptime_seconds: Optional[float] = None
+    current_strategy: Optional[str] = None
+    last_update: Optional[datetime] = None
+
+    # Active Filters
+    filters: Dict[str, Any]  # {entry_filter_type: str, items: List[FilterStatus]}
+
+    # Entry Predictions
+    predictions: Dict[str, Optional[EntryPrediction]]  # {"pe": ..., "ce": ...}
+
+    # Recent Signals
+    signals: List[EntrySignal] = []
+
+    # Market Context
+    market_context: MarketContext
+
+    # Daily Stats
+    daily_stats: DailyStats
+
+    # Error message if visual state unavailable
+    error: Optional[str] = None
+    message: Optional[str] = None
+
+
+class VisualStateResponse(BaseModel):
+    """API response for visual state endpoint."""
+    success: bool
+    data: Optional[StrategyVisualState] = None
+    error: Optional[str] = None
+    message: Optional[str] = None

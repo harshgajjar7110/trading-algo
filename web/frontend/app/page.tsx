@@ -17,6 +17,7 @@ import { useWebSocket } from '@/hooks/useWebSocket';
 import PayoffChart from '@/components/PayoffChart';
 import GreeksDisplay from '@/components/GreeksDisplay';
 import StrategySelector from '@/components/StrategySelector';
+import VisualEngine from '@/components/VisualEngine';
 import { 
   formatCurrency, 
   formatNumber, 
@@ -524,6 +525,11 @@ export default function Dashboard() {
         {/* Strategy Selector Section */}
         <div className="mt-6">
           <StrategySelector onStrategyChange={fetchData} />
+        </div>
+
+        {/* Visual Engine - Real-time Strategy Dashboard */}
+        <div className="mt-6">
+          <VisualEngine refreshInterval={10000} />
         </div>
 
         {/* Greeks Section */}

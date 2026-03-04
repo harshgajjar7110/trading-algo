@@ -5,15 +5,15 @@ default:
   atr_multiplier_ce: 10.0
   atr_multiplier_pe: 10.0
   atr_period: 14
-  ce_gap: 40
+  ce_gap: 50
   ce_quantity: 65
   ce_reset_gap: 30
   ce_start_point: 0
-  ce_symbol_gap: 900
+  ce_symbol_gap: 1200
   ema_period: 20
-  enable_dynamic_gaps: false
+  enable_dynamic_gaps: true
   enable_position_init: false
-  entry_filter_type: NONE
+  entry_filter_type: EMA
   exchange: NFO
   high_vol_size_reduction: 0.5
   history_period_days: 5
@@ -21,15 +21,15 @@ default:
   log_tick_data: true
   max_consecutive_losses: 2
   max_daily_loss_percent: -3.0
-  max_positions_per_side: 6
+  max_positions_per_side: 8
   max_total_positions: 10
   min_price_to_sell: 15.0
   order_type: MARKET
-  pe_gap: 40
+  pe_gap: 50
   pe_quantity: 65
   pe_reset_gap: 30
   pe_start_point: 0
-  pe_symbol_gap: 900
+  pe_symbol_gap: 1200
   product_type: NRML
   profit_check_interval: 20
   profit_target_enabled: true
@@ -45,9 +45,9 @@ default:
   sl_reconcile_on_start: true
   square_off_time: '15:25'
   stop_loss_multiplier: 2.0
-  symbol_initials: NIFTY26310
+  symbol_initials: NIFTY26317
   tag: SurvivorEnhanced
   trailing_stop_distance: 0.5
-  trailing_stop_enabled: false
+  trailing_stop_enabled: true
   trans_type: SELL
-  volatility_sizing: false
+  volatility_sizing: true

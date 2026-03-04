@@ -23,6 +23,7 @@ import {
   StrategyDetails,
   StrategyPreview,
   CurrentStrategy,
+  VisualStateResponse,
 } from '@/types';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
@@ -90,6 +91,19 @@ export const strategyAPI = {
     fetchAPI<StrategyStartResponse>('/api/strategy/restart', {
       method: 'POST',
       body: JSON.stringify({ config_override: configOverride }),
+    }),
+
+  /**
+   * Get visual state for the Visual Engine dashboard
+   */
+  getVisualState: () => fetchAPI<VisualStateResponse>('/api/strategy/visual-state'),
+
+  /**
+   * Refresh visual state cache
+   */
+  refreshVisualState: () =>
+    fetchAPI<VisualStateResponse>('/api/strategy/visual-state/refresh', {
+      method: 'POST',
     }),
 };
 

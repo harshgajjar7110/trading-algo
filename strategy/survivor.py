@@ -45,6 +45,8 @@ except ImportError:
 
 from brokers import BrokerGateway, OrderRequest, Exchange, OrderType, TransactionType, ProductType
 from strategy.position_manager import PositionManager, SLReconciliationResult
+from strategy.gap_risk_manager import GapRiskManager, get_gap_risk_manager
+from strategy.pre_market_data import get_pre_market_service
 
 
 class TrendBias(Enum):
@@ -219,6 +221,31 @@ class SurvivorStrategy:
         # Position sizing
         self.volatility_sizing = config.get('volatility_sizing', False)
         self.high_vol_size_reduction = config.get('high_vol_size_reduction', 0.5)
+        
+        # Gap risk management
+        self.gap_risk_enabled = config.get('gap_risk_enabled', True)
+        self.gap_skip_threshold = config.get('gap_skip_threshold', 1.5)
+        self.gap_reduce_threshold = config.get('gap_reduce_threshold', 1.0)
+        self.monday_entry_delay = config.get('monday_entry_delay', True)
+        self.monday_entry_hour = config.get('monday_entry_hour', 10)
+        self.monday_entry_minute = config.get('monday_entry_minute', 0)
+        
+        # Day-based position sizing multipliers
+        self.day_multipliers = {
+            'Monday': config.get('monday_position_multiplier', 0.5),
+            'Tuesday': config.get('tuesday_position_multiplier', 1.0),
+            'Wednesday': config.get('wednesday_position_multiplier', 1.0),
+            'Thursday': config.get('thursday_position_multiplier', 0.75),
+            'Friday': config.get('friday_position_multiplier', 0.4),
+            'Saturday': 0.0,
+            'Sunday': 0.0,
+        }
+        
+        # Initialize gap risk manager and pre-market service
+        self.gap_risk_manager = get_gap_risk_manager()
+        self.pre_market_service = get_pre_market_service()
+        self._last_premarket_check: Optional[datetime] = None
+        self._current_gap_assessment: Optional[Dict] = None
         
         # State tracking
         self.positions: Dict[str, PositionInfo] = {}
@@ -970,19 +997,139 @@ class SurvivorStrategy:
         return base_gap
         
     def _get_position_size(self, base_quantity: int, indicators: TechnicalIndicators) -> int:
-        """Calculate position size based on volatility"""
-        if not self.volatility_sizing:
-            return base_quantity
-            
-        # Reduce size in high volatility
-        if indicators.volatility_regime == VolatilityRegime.HIGH:
-            return int(base_quantity * self.high_vol_size_reduction)
+        """
+        Calculate position size based on volatility and gap risk.
         
-        # Increase size slightly in low volatility (optional)
-        if indicators.volatility_regime == VolatilityRegime.LOW:
-            return int(base_quantity * 1.1)
+        Applies both volatility-based and day-based position sizing.
+        """
+        adjusted_quantity = base_quantity
+        adjustments = []
+        
+        # Apply volatility sizing
+        if self.volatility_sizing:
+            if indicators.volatility_regime == VolatilityRegime.HIGH:
+                adjusted_quantity = int(adjusted_quantity * self.high_vol_size_reduction)
+                adjustments.append(f"High vol: {self.high_vol_size_reduction:.0%}")
+            elif indicators.volatility_regime == VolatilityRegime.LOW:
+                adjusted_quantity = int(adjusted_quantity * 1.1)
+                adjustments.append("Low vol: 110%")
+        
+        # Apply gap risk / day-based sizing
+        if self.gap_risk_enabled:
+            day_name = datetime.now().strftime("%A")
+            day_multiplier = self.day_multipliers.get(day_name, 1.0)
             
-        return base_quantity
+            if day_multiplier != 1.0:
+                adjusted_quantity = int(adjusted_quantity * day_multiplier)
+                adjustments.append(f"{day_name}: {day_multiplier:.0%}")
+            
+            # Apply gap-based additional reduction if applicable
+            if self._current_gap_assessment:
+                gap_multiplier = self._current_gap_assessment.get('position_multiplier', 1.0)
+                # Use tolerance-based comparison to avoid double-application
+                if gap_multiplier < 1.0 and abs(gap_multiplier - day_multiplier) > 0.001:
+                    adjusted_quantity = int(adjusted_quantity * gap_multiplier)
+                    adjustments.append(f"Gap risk: {gap_multiplier:.0%}")
+        
+        # Log adjustments if any were made
+        if adjustments and adjusted_quantity != base_quantity:
+            logger.info(
+                f"Position sizing: {base_quantity} → {adjusted_quantity} "
+                f"({', '.join(adjustments)})"
+            )
+        
+        return adjusted_quantity
+    
+    def _check_gap_risk(self) -> Tuple[bool, str]:
+        """
+        Check if trading should proceed based on gap risk assessment.
+        
+        Returns:
+            Tuple of (can_trade: bool, reason: str)
+        """
+        if not self.gap_risk_enabled:
+            return True, "Gap risk disabled"
+        
+        # Check time-based rules (Monday entry delay)
+        can_trade, reason = self.gap_risk_manager.can_trade_now()
+        if not can_trade:
+            return False, reason
+        
+        # Check for day-of-week blocking (weekend)
+        day_name = datetime.now().strftime("%A")
+        if day_name in ['Saturday', 'Sunday']:
+            return False, "Markets closed on weekend"
+        
+        # Refresh pre-market data if needed (once per session)
+        if self._should_refresh_premarket_data():
+            self._refresh_premarket_data()
+        
+        # Check gap assessment if available
+        if self._current_gap_assessment:
+            if not self._current_gap_assessment.get('can_trade', True):
+                return False, self._current_gap_assessment.get('message', 'Gap risk too high')
+        
+        return True, "Gap risk OK"
+    
+    def _should_refresh_premarket_data(self) -> bool:
+        """Check if pre-market data needs refreshing"""
+        if self._last_premarket_check is None:
+            return True
+        
+        # Refresh every 30 minutes during pre-market hours
+        elapsed = (datetime.now() - self._last_premarket_check).total_seconds() / 60
+        return elapsed > 30
+    
+    def _refresh_premarket_data(self):
+        """Fetch fresh pre-market data and update gap assessment"""
+        try:
+            premarket_data = self.pre_market_service.fetch_all_data()
+            
+            # Calculate gap from previous close if we have current price
+            nifty_quote = self._nifty_quote()
+            overnight_gap = 0.0
+            if nifty_quote and premarket_data.nifty_previous_close > 0:
+                overnight_gap = ((nifty_quote.last_price - premarket_data.nifty_previous_close)
+                                / premarket_data.nifty_previous_close) * 100
+            
+            # Get gap risk assessment
+            assessment = self.gap_risk_manager.assess_gap_risk(
+                overnight_gap_percent=overnight_gap,
+                gift_nifty_gap=premarket_data.gift_nifty_gap_percent if premarket_data.gift_nifty_price else None
+            )
+            
+            self._current_gap_assessment = {
+                'can_trade': assessment.can_trade,
+                'position_multiplier': assessment.position_multiplier,
+                'message': assessment.message,
+                'gap_percent': assessment.gap_percent,
+                'gift_nifty_gap': assessment.gift_nifty_gap,
+                'recommendation': assessment.recommendation,
+                'timestamp': datetime.now().isoformat(),
+                'premarket_sentiment': premarket_data.overall_sentiment,
+            }
+            
+            self._last_premarket_check = datetime.now()
+            
+            # Log the assessment
+            logger.info(f"Gap risk assessment: {assessment.message}")
+            
+            # Alert if skipping trading
+            if not assessment.can_trade:
+                logger.warning(f"TRADING BLOCKED: {assessment.message}")
+            
+        except Exception as e:
+            logger.error(f"Failed to refresh pre-market data: {e}")
+            # Allow trading with default day-based multipliers on fetch failure
+            # to prevent blocking legitimate trading due to transient issues
+            day_name = datetime.now().strftime("%A")
+            default_multiplier = self.day_multipliers.get(day_name, 1.0)
+            self._current_gap_assessment = {
+                'can_trade': True,
+                'position_multiplier': default_multiplier,
+                'message': f'Gap check failed: {e}. Trading with {day_name} default sizing ({default_multiplier:.0%}).',
+            }
+            logger.warning(f"Trading allowed with default {day_name} multiplier due to gap check failure")
         
     def _check_position_limits(self, option_type: str) -> Tuple[bool, str]:
         """Check if we can add new positions"""
@@ -1562,6 +1709,13 @@ class SurvivorStrategy:
         if not can_trade:
             logger.debug(f"PE trade blocked: {reason}")
             return
+        
+        # Check gap risk before proceeding
+        gap_ok, gap_reason = self._check_gap_risk()
+        if not gap_ok:
+            logger.info(f"PE trade blocked: {gap_reason}")
+            self._record_trade('PE', '', 0, 0, indicators, 'BLOCKED', gap_reason)
+            return
             
         # Apply dynamic gap
         effective_pe_gap = self._get_dynamic_gap(self.strat_var_pe_gap, indicators)
@@ -1631,6 +1785,13 @@ class SurvivorStrategy:
         can_trade, reason = self._check_position_limits('CE')
         if not can_trade:
             logger.debug(f"CE trade blocked: {reason}")
+            return
+        
+        # Check gap risk before proceeding
+        gap_ok, gap_reason = self._check_gap_risk()
+        if not gap_ok:
+            logger.info(f"CE trade blocked: {gap_reason}")
+            self._record_trade('CE', '', 0, 0, indicators, 'BLOCKED', gap_reason)
             return
             
         # Apply dynamic gap
@@ -1878,6 +2039,296 @@ class SurvivorStrategy:
                 'rejection_reasons': [
                     t['reason'] for t in self.rejected_trades[-10:]
                 ]
+            }
+        }
+
+    def get_visual_state(self) -> Dict:
+        """
+        Get complete visual state for the Visual Engine dashboard.
+        
+        Returns structured data for real-time visualization of:
+        - Entry predictions (PE/CE trigger levels and distances)
+        - Active filter statuses (RSI, EMA, ADX, Gap Risk)
+        - Recent entry signals and rejections
+        - Market context (price, trend, volatility)
+        - Daily trading statistics
+        
+        Returns:
+            Dict containing visual state data matching StrategyVisualState schema
+        """
+        from datetime import datetime
+        
+        # Get current market data
+        try:
+            nifty_quote = self._nifty_quote()
+            current_price = nifty_quote.last_price if nifty_quote else None
+        except Exception:
+            current_price = None
+        
+        # Calculate technical indicators
+        indicators = self._get_technical_indicators(current_price) if current_price else TechnicalIndicators()
+        
+        # Calculate filter statuses
+        filter_statuses = self._get_filter_statuses(indicators, current_price)
+        
+        # Calculate entry predictions
+        predictions = self._calculate_entry_predictions(current_price, indicators)
+        
+        # Get recent signals
+        signals = self._get_recent_signals()
+        
+        # Get market context
+        market_context = self._get_market_context(indicators, current_price)
+        
+        # Get daily stats
+        daily_stats = {
+            'trades_taken': len(self.daily_trades),
+            'trades_rejected': len(self.rejected_trades),
+            'pnl': self.daily_pnl,
+            'consecutive_losses': self.consecutive_losses
+        }
+        
+        return {
+            'is_running': True,  # Strategy is active if this method is called
+            'current_strategy': f'Survivor v2.0 ({self.entry_filter_type} filters)',
+            'last_update': datetime.now().isoformat(),
+            'filters': {
+                'entry_filter_type': self.entry_filter_type,
+                'items': filter_statuses
+            },
+            'predictions': predictions,
+            'signals': signals,
+            'market_context': market_context,
+            'daily_stats': daily_stats
+        }
+    
+    def _get_filter_statuses(self, indicators: TechnicalIndicators, current_price: Optional[float]) -> List[Dict]:
+        """Calculate current status of all entry filters."""
+        from datetime import datetime
+        
+        statuses = []
+        
+        # RSI Filter Status
+        if self.entry_filter_type in ['RSI', 'ALL']:
+            rsi_enabled = True
+            rsi_pass = indicators.rsi <= self.rsi_max if indicators.rsi else True
+            rsi_message = f"RSI {indicators.rsi:.1f} <= {self.rsi_max} (Not overbought)" if indicators.rsi else "RSI calculating..."
+            statuses.append({
+                'name': 'RSI Filter',
+                'type': 'RSI',
+                'enabled': True,
+                'current_value': indicators.rsi if indicators.rsi else None,
+                'threshold': self.rsi_max,
+                'status': 'PASS' if rsi_pass else 'FAIL',
+                'message': rsi_message
+            })
+        else:
+            statuses.append({
+                'name': 'RSI Filter',
+                'type': 'RSI',
+                'enabled': False,
+                'current_value': None,
+                'threshold': None,
+                'status': 'DISABLED',
+                'message': 'Filter not enabled'
+            })
+        
+        # EMA Filter Status
+        if self.entry_filter_type in ['EMA', 'ALL']:
+            ema_enabled = True
+            trend_pass = indicators.trend != TrendBias.BEARISH  # For PE side
+            ema_message = f"Trend is {indicators.trend.value} (Price vs EMA)"
+            statuses.append({
+                'name': 'EMA Filter',
+                'type': 'EMA',
+                'enabled': True,
+                'current_value_str': indicators.trend.value,
+                'threshold_str': 'NEUTRAL+',
+                'status': 'PASS' if trend_pass else 'FAIL',
+                'message': ema_message
+            })
+        else:
+            statuses.append({
+                'name': 'EMA Filter',
+                'type': 'EMA',
+                'enabled': False,
+                'current_value_str': None,
+                'threshold_str': None,
+                'status': 'DISABLED',
+                'message': 'Filter not enabled'
+            })
+        
+        # ADX Filter Status
+        if self.entry_filter_type in ['ADX', 'ALL']:
+            adx_pass = indicators.adx >= self.adx_threshold
+            adx_message = f"ADX {indicators.adx:.1f} >= {self.adx_threshold} (Strong trend)" if indicators.adx else "ADX calculating..."
+            statuses.append({
+                'name': 'ADX Filter',
+                'type': 'ADX',
+                'enabled': True,
+                'current_value': indicators.adx if indicators.adx else None,
+                'threshold': self.adx_threshold,
+                'status': 'PASS' if adx_pass else 'FAIL',
+                'message': adx_message
+            })
+        else:
+            statuses.append({
+                'name': 'ADX Filter',
+                'type': 'ADX',
+                'enabled': False,
+                'current_value': None,
+                'threshold': None,
+                'status': 'DISABLED',
+                'message': 'Filter not enabled'
+            })
+        
+        # Gap Risk Filter Status
+        gap_can_trade, gap_reason = self._check_gap_risk()
+        gap_percent = self._current_gap_assessment.get('gap_percent', 0) if self._current_gap_assessment else 0
+        statuses.append({
+            'name': 'Gap Risk',
+            'type': 'GAP',
+            'enabled': self.gap_risk_enabled,
+            'current_value_str': f"{gap_percent:.2f}%" if gap_percent else "N/A",
+            'threshold_str': f"{self.gap_skip_threshold}%",
+            'status': 'PASS' if gap_can_trade else 'BLOCKED',
+            'message': gap_reason
+        })
+        
+        return statuses
+    
+    def _calculate_entry_predictions(self, current_price: Optional[float], indicators: TechnicalIndicators) -> Dict[str, Optional[Dict]]:
+        """Calculate entry predictions for PE and CE sides."""
+        from datetime import datetime, timedelta
+        
+        if not current_price:
+            return {'pe': None, 'ce': None}
+        
+        # Get dynamic gaps based on volatility
+        pe_gap = self._get_dynamic_gap(self.strat_var_pe_gap, indicators) if self.enable_dynamic_gaps else self.strat_var_pe_gap
+        ce_gap = self._get_dynamic_gap(self.strat_var_ce_gap, indicators) if self.enable_dynamic_gaps else self.strat_var_ce_gap
+        
+        # Calculate trigger prices
+        pe_trigger = self.nifty_pe_last_value + pe_gap if hasattr(self, 'nifty_pe_last_value') else current_price + pe_gap
+        ce_trigger = self.nifty_ce_last_value - ce_gap if hasattr(self, 'nifty_ce_last_value') else current_price - ce_gap
+        
+        # PE Prediction (entry when price rises above trigger)
+        pe_distance = pe_trigger - current_price if pe_trigger else None
+        pe_distance_pct = (pe_distance / current_price * 100) if pe_distance and current_price else None
+        
+        # Check blocking reasons for PE
+        pe_blocking_reasons = []
+        gap_can_trade, _ = self._check_gap_risk()
+        if not gap_can_trade:
+            pe_blocking_reasons.append("Gap risk too high")
+        if self.pe_positions_count >= self.max_positions_per_side:
+            pe_blocking_reasons.append("Max PE positions reached")
+        if indicators.trend == TrendBias.BEARISH and self.entry_filter_type in ['EMA', 'ALL']:
+            pe_blocking_reasons.append("Trend is BEARISH")
+        if indicators.rsi > self.rsi_max and self.entry_filter_type in ['RSI', 'ALL']:
+            pe_blocking_reasons.append(f"RSI {indicators.rsi:.1f} > {self.rsi_max}")
+        
+        # Estimate time based on ATR
+        pe_estimated_time = None
+        if pe_distance and indicators.atr > 0:
+            est_minutes = (abs(pe_distance) / indicators.atr) * 5
+            pe_estimated_time = f"~{max(1, int(est_minutes))} min"
+        
+        pe_prediction = {
+            'side': 'PE',
+            'status': 'BLOCKED' if pe_blocking_reasons else ('READY' if pe_distance and pe_distance <= 0 else 'WAITING'),
+            'current_price': current_price,
+            'trigger_price': pe_trigger,
+            'distance_to_trigger': pe_distance,
+            'distance_percent': pe_distance_pct,
+            'estimated_time': pe_estimated_time,
+            'blocking_reasons': pe_blocking_reasons,
+            'next_check': (datetime.now() + timedelta(minutes=1)).isoformat()
+        }
+        
+        # CE Prediction (entry when price falls below trigger)
+        ce_distance = current_price - ce_trigger if ce_trigger else None
+        ce_distance_pct = (ce_distance / current_price * 100) if ce_distance and current_price else None
+        
+        # Check blocking reasons for CE
+        ce_blocking_reasons = []
+        if not gap_can_trade:
+            ce_blocking_reasons.append("Gap risk too high")
+        if self.ce_positions_count >= self.max_positions_per_side:
+            ce_blocking_reasons.append("Max CE positions reached")
+        if indicators.trend == TrendBias.BULLISH and self.entry_filter_type in ['EMA', 'ALL']:
+            ce_blocking_reasons.append("Trend is BULLISH")
+        if indicators.rsi < self.rsi_min and self.entry_filter_type in ['RSI', 'ALL']:
+            ce_blocking_reasons.append(f"RSI {indicators.rsi:.1f} < {self.rsi_min}")
+        
+        # Estimate time based on ATR
+        ce_estimated_time = None
+        if ce_distance and indicators.atr > 0:
+            est_minutes = (abs(ce_distance) / indicators.atr) * 5
+            ce_estimated_time = f"~{max(1, int(est_minutes))} min"
+        
+        ce_prediction = {
+            'side': 'CE',
+            'status': 'BLOCKED' if ce_blocking_reasons else ('READY' if ce_distance and ce_distance <= 0 else 'WAITING'),
+            'current_price': current_price,
+            'trigger_price': ce_trigger,
+            'distance_to_trigger': ce_distance,
+            'distance_percent': ce_distance_pct,
+            'estimated_time': ce_estimated_time,
+            'blocking_reasons': ce_blocking_reasons,
+            'next_check': (datetime.now() + timedelta(minutes=1)).isoformat()
+        }
+        
+        return {'pe': pe_prediction, 'ce': ce_prediction}
+    
+    def _get_recent_signals(self) -> List[Dict]:
+        """Get recent entry signals/rejections for display."""
+        signals = []
+        
+        # Combine daily trades and rejected trades, sort by timestamp
+        all_events = []
+        
+        for trade in self.daily_trades[-10:]:  # Last 10 trades
+            all_events.append({
+                'timestamp': trade.get('time', ''),
+                'side': trade.get('option_type', 'PE'),
+                'type': 'ENTRY',
+                'price': trade.get('entry_price', 0),
+                'reason': f"Entry at strike {trade.get('strike', 'unknown')}",
+                'filters_passed': [],
+                'filters_failed': []
+            })
+        
+        for rejection in self.rejected_trades[-10:]:  # Last 10 rejections
+            all_events.append({
+                'timestamp': rejection.get('time', ''),
+                'side': rejection.get('option_type', 'PE'),
+                'type': 'REJECTION',
+                'price': rejection.get('price', 0),
+                'reason': rejection.get('reason', 'Unknown'),
+                'filters_passed': rejection.get('filters_passed', []),
+                'filters_failed': rejection.get('filters_failed', [])
+            })
+        
+        # Sort by timestamp (most recent first) and return top 20
+        all_events.sort(key=lambda x: x.get('timestamp', ''), reverse=True)
+        return all_events[:20]
+    
+    def _get_market_context(self, indicators: TechnicalIndicators, current_price: Optional[float]) -> Dict:
+        """Get current market context information."""
+        gap_can_trade, gap_message = self._check_gap_risk()
+        gap_percent = self._current_gap_assessment.get('gap_percent', 0) if self._current_gap_assessment else 0
+        
+        return {
+            'nifty_price': current_price,
+            'trend': indicators.trend.value.upper() if indicators.trend else 'NEUTRAL',
+            'volatility_regime': indicators.volatility_regime.value.upper() if indicators.volatility_regime else 'NORMAL',
+            'atr_value': indicators.atr if indicators.atr else None,
+            'gap_assessment': {
+                'can_trade': gap_can_trade,
+                'message': gap_message,
+                'gap_percent': gap_percent,
+                'threshold_percent': self.gap_skip_threshold
             }
         }
 

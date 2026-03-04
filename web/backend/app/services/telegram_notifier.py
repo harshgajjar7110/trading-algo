@@ -384,6 +384,54 @@ Trading session ended.
 """
         return await self._send_message(message.strip())
 
+    async def send_gap_risk_alert(
+        self,
+        gap_percent: float,
+        gift_nifty_gap: Optional[float] = None,
+        position_multiplier: float = 1.0,
+        trading_blocked: bool = False,
+        reason: Optional[str] = None,
+    ) -> bool:
+        """
+        Notify on gap risk conditions.
+
+        Args:
+            gap_percent: Overnight gap percentage
+            gift_nifty_gap: GIFT Nifty pre-market gap (optional)
+            position_multiplier: Position size multiplier applied
+            trading_blocked: Whether trading is blocked due to gap
+            reason: Additional reason/message
+        """
+        if trading_blocked:
+            emoji = "🚫"
+            title = "TRADING BLOCKED - GAP RISK"
+            status = "Trading suspended due to high gap risk"
+        elif position_multiplier < 1.0:
+            emoji = "⚠️"
+            title = "GAP RISK WARNING"
+            status = f"Position size reduced to {position_multiplier:.0%}"
+        else:
+            emoji = "📊"
+            title = "GAP RISK ASSESSMENT"
+            status = "Gap risk within acceptable limits"
+
+        gift_nifty_text = ""
+        if gift_nifty_gap is not None:
+            gift_nifty_text = f"\n<b>GIFT Nifty Gap:</b> {gift_nifty_gap:+.2f}%"
+
+        reason_text = f"\n<b>Reason:</b> {reason}" if reason else ""
+
+        message = f"""
+<b>{emoji} {title}</b>
+
+<b>Overnight Gap:</b> {gap_percent:+.2f}%{gift_nifty_text}
+<b>Status:</b> {status}{reason_text}
+<b>Time:</b> {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+
+<i>Gap risk management active</i>
+"""
+        return await self._send_message(message.strip())
+
     async def close(self):
         """Close the HTTP session."""
         if self._session and not self._session.closed:

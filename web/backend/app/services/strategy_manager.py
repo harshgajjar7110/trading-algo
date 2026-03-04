@@ -80,6 +80,10 @@ class StrategyManager:
         self._ce_reset_flag: bool = False
         self._last_update: Optional[datetime] = None
 
+        # Visual state cache for Visual Engine
+        self._visual_state_cache: Optional[Dict[str, Any]] = None
+        self._last_visual_state_update: Optional[datetime] = None
+
         # Callbacks for state changes
         self._on_state_change: Optional[Callable] = None
 
@@ -485,6 +489,83 @@ class StrategyManager:
             instance_id=self._current_instance.id if self._current_instance else None,
         )
 
+    def get_visual_state(self) -> Optional[Dict[str, Any]]:
+        """
+        Get visual state for the Visual Engine dashboard.
+        
+        Returns cached visual state if available, or generates a basic
+        state from current strategy information.
+        
+        Returns:
+            Dict containing visual state data, or None if strategy not running
+        """
+        if self._status != StrategyStatus.RUNNING:
+            return None
+        
+        # Return cached visual state if available and fresh (< 30 seconds old)
+        if self._visual_state_cache and self._last_visual_state_update:
+            age_seconds = (datetime.utcnow() - self._last_visual_state_update).total_seconds()
+            if age_seconds < 30:
+                return self._visual_state_cache
+        
+        # Generate basic visual state from available data
+        uptime = None
+        if self._start_time:
+            uptime = time.time() - self._start_time
+        
+        current_strategy = "Unknown"
+        if self._current_instance:
+            current_strategy = f"{self._current_instance.name} ({self._current_instance.strategy_type.value})"
+        
+        # Build basic visual state
+        visual_state = {
+            "is_running": True,
+            "uptime_seconds": uptime,
+            "current_strategy": current_strategy,
+            "last_update": datetime.utcnow().isoformat(),
+            "filters": {
+                "entry_filter_type": "ALL",
+                "items": []
+            },
+            "predictions": {
+                "pe": None,
+                "ce": None
+            },
+            "signals": [],
+            "market_context": {
+                "nifty_price": None,
+                "trend": "NEUTRAL",
+                "volatility_regime": "NORMAL",
+                "gap_assessment": {
+                    "can_trade": True,
+                    "message": "Visual state loading..."
+                }
+            },
+            "daily_stats": {
+                "trades_taken": 0,
+                "trades_rejected": 0,
+                "pnl": 0.0,
+                "consecutive_losses": 0
+            },
+            "message": "Visual state is initializing. Full data will be available shortly."
+        }
+        
+        return visual_state
+
+    def update_visual_state_cache(self, visual_state: Dict[str, Any]) -> None:
+        """
+        Update the visual state cache.
+        
+        This is called by the API endpoint or state processor when
+        fresh visual state data is available from the strategy.
+        
+        Args:
+            visual_state: The new visual state data
+        """
+        self._visual_state_cache = visual_state
+        self._last_visual_state_update = datetime.utcnow()
+        logger.debug(f"Visual state cache updated at {self._last_visual_state_update}")
+
     def get_current_strategy_info(self) -> Optional[Dict]:
         """Get info about currently running strategy."""
         if not self._current_instance:
@@ -545,6 +626,29 @@ class StrategyManager:
             self._pe_reset_flag = update.get("pe_reset_flag", False)
             self._ce_reset_flag = update.get("ce_reset_flag", False)
             self._last_update = datetime.utcnow()
+
+        elif update.get("type") == "GAP_RISK_UPDATE":
+            # Handle gap risk notifications from strategy
+            gap_percent = update.get("gap_percent", 0.0)
+            gift_nifty_gap = update.get("gift_nifty_gap")
+            position_multiplier = update.get("position_multiplier", 1.0)
+            trading_blocked = update.get("trading_blocked", False)
+            reason = update.get("reason", "")
+            
+            # Send Telegram notification for significant gap risk events
+            async def _notify_gap_risk():
+                try:
+                    await telegram_notifier.send_gap_risk_alert(
+                        gap_percent=gap_percent,
+                        gift_nifty_gap=gift_nifty_gap,
+                        position_multiplier=position_multiplier,
+                        trading_blocked=trading_blocked,
+                        reason=reason,
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to send gap risk notification: {e}")
+            
+            asyncio.create_task(_notify_gap_risk())
 
         elif update.get("type") == "ERROR":
             error_msg = update.get("message", "Unknown error")
@@ -735,6 +839,65 @@ class StrategyManager:
                     logger.error(
                         f"Error checking profit targets at startup: {e}", exc_info=True
                     )
+
+            # Perform gap risk assessment at startup
+            try:
+                from strategy import GapRiskManager, PreMarketDataService
+                from datetime import datetime
+                
+                logger.info("=" * 60)
+                logger.info("GAP RISK ASSESSMENT")
+                logger.info("=" * 60)
+                
+                gap_risk_manager = GapRiskManager()
+                pre_market_service = PreMarketDataService()
+                
+                # Fetch pre-market data
+                premarket_data = pre_market_service.fetch_all_data()
+                
+                # Calculate overnight gap if we have current price
+                overnight_gap = 0.0
+                try:
+                    nifty_quote = broker.get_quote("NSE:NIFTY 50")
+                    if nifty_quote and premarket_data.nifty_previous_close > 0:
+                        overnight_gap = ((nifty_quote.last_price - premarket_data.nifty_previous_close)
+                                        / premarket_data.nifty_previous_close) * 100
+                        logger.info(f"Overnight gap: {overnight_gap:+.2f}%")
+                except Exception as e:
+                    logger.warning(f"Could not calculate overnight gap: {e}")
+                
+                # Assess gap risk
+                assessment = gap_risk_manager.assess_gap_risk(
+                    overnight_gap_percent=overnight_gap,
+                    gift_nifty_gap=premarket_data.gift_nifty_gap_percent if premarket_data.gift_nifty_price else None
+                )
+                
+                logger.info(f"Gap risk assessment: {assessment.message}")
+                logger.info(f"Position multiplier: {assessment.position_multiplier:.0%}")
+                logger.info(f"Can trade: {assessment.can_trade}")
+                
+                # Send gap risk notification
+                state_queue.put(
+                    {
+                        "type": "GAP_RISK_UPDATE",
+                        "gap_percent": overnight_gap,
+                        "gift_nifty_gap": premarket_data.gift_nifty_gap_percent if premarket_data.gift_nifty_price else None,
+                        "position_multiplier": assessment.position_multiplier,
+                        "trading_blocked": not assessment.can_trade,
+                        "reason": assessment.message,
+                    }
+                )
+                
+                # Check if Monday entry delay applies
+                day_name = datetime.now().strftime("%A")
+                current_time = datetime.now().time()
+                if day_name == "Monday" and current_time.hour < 10:
+                    wait_minutes = (10 - current_time.hour) * 60 - current_time.minute
+                    logger.warning(f"Monday entry delay: Waiting {wait_minutes} minutes until 10:00 AM")
+                    
+            except Exception as e:
+                logger.warning(f"Gap risk assessment failed: {e}")
+                # Don't block trading if gap risk check fails
 
             # Send initial state
             state_queue.put(

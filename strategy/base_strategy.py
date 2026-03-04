@@ -136,6 +136,21 @@ class StrategyConfig:
     volatility_sizing: bool = False
     high_vol_size_reduction: float = 0.5
     
+    # Gap risk management
+    gap_risk_enabled: bool = True  # Enable gap risk protection
+    gap_skip_threshold: float = 1.5  # Skip trading if gap > 1.5%
+    gap_reduce_threshold: float = 1.0  # Reduce size if gap > 1.0%
+    monday_entry_delay: bool = True  # Delay entry on Monday until 10:00 AM
+    monday_entry_hour: int = 10  # Monday entry hour
+    monday_entry_minute: int = 0  # Monday entry minute
+    
+    # Day-based position sizing multipliers
+    monday_position_multiplier: float = 0.5   # 50% on Monday
+    tuesday_position_multiplier: float = 1.0  # 100% on Tuesday
+    wednesday_position_multiplier: float = 1.0  # 100% on Wednesday
+    thursday_position_multiplier: float = 0.75  # 75% on Thursday (expiry)
+    friday_position_multiplier: float = 0.4   # 40% on Friday (weekend risk)
+    
     # Reference values (0 = use current market price)
     pe_start_point: float = 0.0
     ce_start_point: float = 0.0

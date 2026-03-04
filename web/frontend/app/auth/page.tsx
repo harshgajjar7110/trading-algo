@@ -2,8 +2,8 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { authAPI } from '@/lib/api';
-import { LoginUrlResponse, AuthStatusResponse, TokenVerifyResponse } from '@/types';
+import { authAPI, tradingAPI } from '@/lib/api';
+import { LoginUrlResponse, AuthStatusResponse, TokenVerifyResponse, PositionsResponse } from '@/types';
 
 export default function AuthPage() {
   const [status, setStatus] = useState<AuthStatusResponse | null>(null);
@@ -13,6 +13,7 @@ export default function AuthPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const [positions, setPositions] = useState<PositionsResponse | null>(null);
 
   // Fetch auth status on mount
   useEffect(() => {
@@ -24,10 +25,14 @@ export default function AuthPage() {
       const statusData = await authAPI.getStatus();
       setStatus(statusData);
       
-      // If authenticated, verify the token works
+      // If authenticated, verify the token works and fetch positions
       if (statusData.authenticated) {
-        const verifyData = await authAPI.verifyToken();
+        const [verifyData, positionsData] = await Promise.all([
+          authAPI.verifyToken(),
+          tradingAPI.getPositions(),
+        ]);
         setVerifyResult(verifyData);
+        setPositions(positionsData);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to fetch auth status');
@@ -62,12 +67,12 @@ export default function AuthPage() {
       const response = await authAPI.submitToken(requestToken.trim());
       
       if (response.success) {
-        setSuccess(response.message + ' Verifying token...');
+        setSuccess(response.message + ' Verifying token and fetching positions...');
         setRequestToken('');
         setLoginUrl(null);
-        // Refresh status and verify token
+        // Refresh status, verify token, and fetch positions
         await fetchStatus();
-        setSuccess(prev => prev?.replace(' Verifying token...', '') + ' Token verified!');
+        setSuccess(prev => prev?.replace(' Verifying token and fetching positions...', '') + ' Token verified! Positions loaded.');
       } else {
         setError(response.message);
       }
@@ -269,10 +274,30 @@ export default function AuthPage() {
               </svg>
             </div>
             <h3 className="text-lg font-medium text-gray-900 mb-2">Already Authenticated</h3>
-            <p className="text-gray-600 mb-6">
-              You are currently authenticated with {status.broker}. 
+            <p className="text-gray-600 mb-4">
+              You are currently authenticated with {status.broker}.
               You can start trading from the dashboard.
             </p>
+
+            {/* Positions Summary */}
+            {positions && (
+              <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
+                <p className="text-blue-800 font-medium">
+                  📊 Positions Loaded: {positions.positions.length}
+                </p>
+                {positions.positions.length > 0 && (
+                  <p className="text-blue-700 text-sm mt-1">
+                    Total P&L: ₹{positions.total_pnl.toFixed(2)}
+                  </p>
+                )}
+                {positions.error && (
+                  <p className="text-red-600 text-sm mt-1">
+                    Error: {positions.error}
+                  </p>
+                )}
+              </div>
+            )}
+
             <div className="flex justify-center space-x-4">
               <Link href="/" className="btn-primary">
                 Go to Dashboard

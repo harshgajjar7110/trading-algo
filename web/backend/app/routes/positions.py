@@ -5,7 +5,7 @@ Endpoints for managing positions and orders.
 Fetches live data from broker when strategy is running.
 """
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter
 
 from app.models.schemas import (
     PositionsResponse,
@@ -31,68 +31,71 @@ router = APIRouter(tags=["Trading"])
 @router.get("/positions", response_model=PositionsResponse)
 async def get_positions():
     """
-    Get all current positions from live data stream.
+    Get all current positions.
 
-    Returns live positions when strategy is running.
-    Returns empty list with message when strategy is stopped.
+    Returns live positions from stream when strategy is running.
+    Fetches directly from broker when authenticated but strategy is stopped.
+    Returns empty list with message when not authenticated.
 
     Returns:
         PositionsResponse: List of positions with total PnL
     """
-    if not live_data_manager.is_streaming:
-        # Strategy not running - return empty with message
+    # If strategy is running, use live data stream (more efficient)
+    if live_data_manager.is_streaming:
+        positions_data = live_data_manager.get_positions()
+
+        if not positions_data:
+            return PositionsResponse(
+                positions=[],
+                total_pnl=0.0,
+                total_pnl_percent=0.0,
+                message="No positions found",
+            )
+
+        positions = []
+        total_pnl = 0.0
+
+        for pos_data in positions_data:
+            # Calculate PnL percentage
+            pnl = pos_data.get("pnl", 0.0)
+            pnl_percent = 0.0
+            avg_price = pos_data.get("average_price", 0)
+            qty = pos_data.get("quantity", 0)
+
+            if avg_price and avg_price > 0 and qty != 0:
+                position_value = avg_price * abs(qty)
+                if position_value > 0:
+                    pnl_percent = (pnl / position_value) * 100
+
+            position = Position(
+                symbol=pos_data.get("symbol", ""),
+                exchange=pos_data.get("exchange", "NFO"),
+                quantity=qty,
+                average_price=avg_price,
+                current_price=None,  # Will be updated via quotes
+                pnl=pnl,
+                pnl_percent=pnl_percent,
+                product_type=pos_data.get("product_type", "NRML"),
+                side="SHORT" if qty < 0 else "LONG",
+            )
+            positions.append(position)
+            total_pnl += pnl
+
         return PositionsResponse(
-            positions=[],
-            total_pnl=0.0,
-            total_pnl_percent=0.0,
-            message="Strategy not running - no live data available. Start the strategy to see positions.",
+            positions=positions,
+            total_pnl=total_pnl,
+            total_pnl_percent=0.0,  # Would need account value
         )
 
-    # Get live positions from stream
-    positions_data = live_data_manager.get_positions()
+    # Strategy not running - fetch directly from broker
+    # This allows viewing positions even when strategy is stopped, as long as authenticated
+    response = broker_service.get_positions()
 
-    if not positions_data:
-        return PositionsResponse(
-            positions=[],
-            total_pnl=0.0,
-            total_pnl_percent=0.0,
-            message="No positions found",
-        )
+    # Add a message indicating positions are from broker (not live stream)
+    if not response.error and response.positions:
+        response.message = "Positions fetched from broker (strategy not running)"
 
-    positions = []
-    total_pnl = 0.0
-
-    for pos_data in positions_data:
-        # Calculate PnL percentage
-        pnl = pos_data.get("pnl", 0.0)
-        pnl_percent = 0.0
-        avg_price = pos_data.get("average_price", 0)
-        qty = pos_data.get("quantity", 0)
-
-        if avg_price and avg_price > 0 and qty != 0:
-            position_value = avg_price * abs(qty)
-            if position_value > 0:
-                pnl_percent = (pnl / position_value) * 100
-
-        position = Position(
-            symbol=pos_data.get("symbol", ""),
-            exchange=pos_data.get("exchange", "NFO"),
-            quantity=qty,
-            average_price=avg_price,
-            current_price=None,  # Will be updated via quotes
-            pnl=pnl,
-            pnl_percent=pnl_percent,
-            product_type=pos_data.get("product_type", "NRML"),
-            side="SHORT" if qty < 0 else "LONG",
-        )
-        positions.append(position)
-        total_pnl += pnl
-
-    return PositionsResponse(
-        positions=positions,
-        total_pnl=total_pnl,
-        total_pnl_percent=0.0,  # Would need account value
-    )
+    return response
 
 
 @router.post("/positions/refresh")

@@ -24,6 +24,7 @@ from app.routes import (
     auth,
     strategy_selector,
     monitoring,
+    visual,
 )
 from app.websocket.manager import (
     connection_manager,
@@ -115,6 +116,7 @@ app.include_router(analysis.router)
 app.include_router(greeks.router)
 app.include_router(auth.router, prefix="/api")
 app.include_router(monitoring.router, prefix="/api")  # Monitoring and health routes
+app.include_router(visual.router, prefix="/api")  # Visual Engine routes
 
 
 # =============================================================================
@@ -296,5 +298,9 @@ if __name__ == "__main__":
     import uvicorn
 
     uvicorn.run(
-        "app.main:app", host=settings.HOST, port=settings.PORT, reload=settings.DEBUG
+        "app.main:app",
+        host=settings.HOST,
+        port=settings.PORT,
+        reload=settings.DEBUG,
+        access_log=False,
     )

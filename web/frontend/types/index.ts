@@ -261,6 +261,7 @@ export interface PositionsResponse {
   total_pnl: number;
   total_pnl_percent: number;
   error?: string;  // Error message if positions couldn't be fetched
+  message?: string;  // Info message about the data source
 }
 
 // =============================================================================
@@ -515,4 +516,103 @@ export interface TokenVerifyResponse {
   valid: boolean;
   message: string;
   profile?: Record<string, unknown>;
+}
+
+// =============================================================================
+// Visual Engine Types
+// =============================================================================
+
+export type FilterType = 'RSI' | 'EMA' | 'ADX' | 'TREND' | 'GAP';
+
+export type FilterStatusType = 'PASS' | 'FAIL' | 'PENDING' | 'BLOCKED' | 'DISABLED';
+
+export type PredictionStatus = 'READY' | 'WAITING' | 'BLOCKED' | 'COOLDOWN';
+
+export type TrendDirection = 'BULLISH' | 'BEARISH' | 'NEUTRAL';
+
+export type VolatilityRegime = 'LOW' | 'NORMAL' | 'HIGH';
+
+export type SignalType = 'ENTRY' | 'REJECTION' | 'EXIT';
+
+export interface FilterStatus {
+  name: string;
+  type: FilterType;
+  enabled: boolean;
+  current_value?: number | null;
+  current_value_str?: string | null;
+  threshold?: number | null;
+  threshold_str?: string | null;
+  status: FilterStatusType;
+  message: string;
+}
+
+export interface EntryPrediction {
+  side: 'PE' | 'CE';
+  status: PredictionStatus;
+  current_price: number | null;
+  trigger_price: number | null;
+  distance_to_trigger: number | null;
+  distance_percent: number | null;
+  estimated_time: string | null;
+  blocking_reasons: string[];
+  next_check: string | null;
+}
+
+export interface EntrySignal {
+  timestamp: string;
+  side: 'PE' | 'CE';
+  type: SignalType;
+  price: number;
+  reason: string;
+  filters_passed: string[];
+  filters_failed: string[];
+}
+
+export interface GapAssessment {
+  can_trade: boolean;
+  message: string;
+  gap_percent?: number | null;
+  threshold_percent?: number | null;
+}
+
+export interface MarketContext {
+  nifty_price: number | null;
+  trend: TrendDirection;
+  volatility_regime: VolatilityRegime;
+  atr_value?: number | null;
+  gap_assessment: GapAssessment;
+}
+
+export interface DailyStats {
+  trades_taken: number;
+  trades_rejected: number;
+  pnl: number;
+  consecutive_losses: number;
+}
+
+export interface StrategyVisualState {
+  is_running: boolean;
+  uptime_seconds?: number | null;
+  current_strategy?: string | null;
+  last_update?: string | null;
+  filters: {
+    entry_filter_type: string;
+    items: FilterStatus[];
+  };
+  predictions: {
+    pe: EntryPrediction | null;
+    ce: EntryPrediction | null;
+  };
+  signals: EntrySignal[];
+  market_context: MarketContext;
+  daily_stats: DailyStats;
+  error?: string | null;
+  message?: string | null;
+}
+
+export interface VisualStateResponse {
+  success: boolean;
+  data?: StrategyVisualState | null;
+  error?: string | null;
+  message?: string | null;
 }

@@ -379,6 +379,13 @@ class ZerodhaDriver(BrokerDriver):
                      If provided, only instruments from this exchange are kept,
                      significantly reducing memory usage.
         """
+        if self._kite is None:
+            raise RuntimeError(
+                "Zerodha driver not initialized. "
+                "Please set BROKER_API_KEY and BROKER_ACCESS_TOKEN environment variables, "
+                "or ensure TOTP authentication is configured."
+            )
+        
         # Fetch instruments from API
         all_instruments = self._kite.instruments()
         

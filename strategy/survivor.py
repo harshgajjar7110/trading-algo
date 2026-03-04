@@ -114,7 +114,8 @@ class SurvivorStrategy:
         self.broker = broker
         self.symbol_initials = self.strat_var_symbol_initials
         self.order_tracker = order_tracker  # Store OrderTracker
-        self.broker.download_instruments()
+        # Download only NFO instruments to save memory (filter by exchange)
+        self.broker.download_instruments(exchange=self.strat_var_exchange)
         
         # Build lightweight instrument cache from DataFrame, then free the DataFrame
         instruments_df = self.broker.get_instruments()
@@ -160,12 +161,19 @@ class SurvivorStrategy:
         
         self._initialize_state()
 
-        # Initialize Historical Data for Indicators - use deque with maxlen for O(1) eviction
-        max_history = getattr(self, 'strat_var_max_history_size', 2000)
-        self.history_data: deque = deque(maxlen=max_history)
+        # Initialize Historical Data for Indicators - only if filters are enabled
+        # This saves memory when running without entry filters (entry_filter_type = NONE)
+        self.history_data: Optional[deque] = None
         self.last_indicators = {} # Cache for logging
         self.last_minute_processed = None
-        self._fetch_initial_history()
+        
+        # Only allocate history tracking if entry filters are enabled
+        if self.strat_var_entry_filter_type and self.strat_var_entry_filter_type != "NONE":
+            max_history = getattr(self, 'strat_var_max_history_size', 2000)
+            self.history_data = deque(maxlen=max_history)
+            self._fetch_initial_history()
+        else:
+            logger.info("Entry filters disabled (NONE) - skipping historical data tracking to save memory")
 
     def _fetch_initial_history(self):
         """Fetch historical data to warm up indicators."""
@@ -215,7 +223,14 @@ class SurvivorStrategy:
             logger.error(f"Error fetching historical data: {e}")
 
     def _update_history(self, current_price, current_ts=None):
-        """Update history with current tick using memory-efficient Candle objects."""
+        """Update history with current tick using memory-efficient Candle objects.
+        
+        Note: This method does nothing if entry filters are disabled (history_data is None).
+        """
+        # Skip if history tracking is disabled (filters not enabled)
+        if self.history_data is None:
+            return
+            
         if not current_ts:
             current_ts = datetime.now().timestamp()
 
@@ -255,7 +270,14 @@ class SurvivorStrategy:
             last_candle.low = min(last_candle.low, current_price)
 
     def _calculate_indicators(self):
-        """Calculate RSI, ADX, EMA on self.history_data using Candle objects."""
+        """Calculate RSI, ADX, EMA on self.history_data using Candle objects.
+        
+        Returns None if history tracking is disabled or insufficient data.
+        """
+        # Skip if history tracking is disabled
+        if self.history_data is None:
+            return None
+            
         if len(self.history_data) < 50: # Need enough data
             return None
 

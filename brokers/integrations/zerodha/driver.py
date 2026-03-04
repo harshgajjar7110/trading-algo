@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+import logging
 import os
 from typing import Any, Dict, List, Optional
 from urllib import request
@@ -20,6 +21,8 @@ from ...core.schemas import (
 from ...mappings import MappingRegistry as M
 import pandas as pd
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 class ZerodhaDriver(BrokerDriver):
     """Zerodha driver using kiteconnect when available.
@@ -368,9 +371,26 @@ class ZerodhaDriver(BrokerDriver):
             return []
 
     # --- Instruments ---
-    def download_instruments(self) -> None:
-        df = pd.DataFrame(self._kite.instruments())
-        columns = ["instrument_token", "exchange_token", "tradingsymbol", "name", "last_price", "expiry", "strike", "tick_size", "lot_size", "instrument_type", "segment", "exchange"]
+    def download_instruments(self, exchange: Optional[str] = None) -> None:
+        """Download and cache instruments with optional exchange filtering for memory efficiency.
+        
+        Args:
+            exchange: Optional exchange filter (e.g., 'NFO', 'NSE', 'BSE').
+                     If provided, only instruments from this exchange are kept,
+                     significantly reducing memory usage.
+        """
+        # Fetch instruments from API
+        all_instruments = self._kite.instruments()
+        
+        # Filter by exchange if specified (saves memory by processing less data)
+        if exchange:
+            all_instruments = [i for i in all_instruments if i.get('exchange') == exchange]
+            logger.info(f"Filtered to {exchange} exchange: {len(all_instruments)} instruments")
+        
+        # Define minimal columns needed for trading
+        columns = ["instrument_token", "exchange_token", "tradingsymbol", "name",
+                   "last_price", "expiry", "strike", "tick_size", "lot_size",
+                   "instrument_type", "segment", "exchange"]
         header_mapping = {
             "instrument_token": "token",
             "exchange_token": "exchange_token",
@@ -385,16 +405,34 @@ class ZerodhaDriver(BrokerDriver):
             "segment": "segment",
             "exchange": "exchange"
         }
+        
+        # Create DataFrame with only needed columns
+        df = pd.DataFrame(all_instruments)
         df = df[columns]
         df.columns = list(header_mapping.values())
-        df['expiry'] = pd.to_datetime(df['expiry']).dt.date
-        df['days_to_expiry'] = df['expiry'].apply(lambda x: np.busday_count(datetime.now().date(), x) + 1 if not pd.isna(x) else np.nan)
+        
+        # Process expiry dates efficiently
+        df['expiry'] = pd.to_datetime(df['expiry'], errors='coerce').dt.date
+        
+        # Calculate days to expiry only for instruments with expiry
+        mask = df['expiry'].notna()
+        if mask.any():
+            today = datetime.now().date()
+            df.loc[mask, 'days_to_expiry'] = df.loc[mask, 'expiry'].apply(
+                lambda x: np.busday_count(today, x) + 1
+            )
+        
         self.master_contract_df = df
-        self.cache_file = ".cache/zerodha_master_contract.csv"
-        if not os.path.exists(os.path.dirname(self.cache_file)):
-            os.makedirs(os.path.dirname(self.cache_file))
+        self.cache_file = f".cache/zerodha_master_contract{'_' + exchange if exchange else ''}.csv"
+        
+        # Ensure cache directory exists
+        cache_dir = os.path.dirname(self.cache_file)
+        if cache_dir and not os.path.exists(cache_dir):
+            os.makedirs(cache_dir)
+            
+        # Save to cache
         df.to_csv(self.cache_file, index=False)
-        return df
+        logger.info(f"Downloaded {len(df)} instruments, saved to {self.cache_file}")
 
     def get_instruments(self) -> List[Instrument]:
         return self.master_contract_df

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import datetime, timedelta
+import inspect
 import time
 from typing import Any, Dict, List, Optional, Union
 
@@ -26,6 +27,10 @@ class BrokerGateway:
     def __init__(self, driver: BrokerDriver, broker_name: str) -> None:
         self.driver = driver
         self.broker_name = broker_name
+        # Cache whether driver supports exchange filtering to avoid repeated inspection
+        self._driver_supports_exchange_filter = (
+            'exchange' in inspect.signature(self.driver.download_instruments).parameters
+        )
 
     # --- Construction helpers ---
     @classmethod
@@ -171,8 +176,19 @@ class BrokerGateway:
         return self.driver.get_option_chain(underlying, exchange, **kwargs)
 
     # --- Instruments ---
-    def download_instruments(self) -> None:
-        self.driver.download_instruments()
+    def download_instruments(self, exchange: Optional[str] = None) -> None:
+        """Download and cache instruments with optional exchange filtering.
+        
+        Args:
+            exchange: Optional exchange filter (e.g., 'NFO', 'NSE', 'BSE').
+                     When specified, only instruments from this exchange are loaded,
+                     significantly reducing memory usage.
+        """
+        # Use cached flag to check if driver supports exchange filtering
+        if self._driver_supports_exchange_filter:
+            self.driver.download_instruments(exchange=exchange)
+        else:
+            self.driver.download_instruments()
 
     def get_instruments(self) -> List[Instrument]:
         return self.driver.get_instruments()

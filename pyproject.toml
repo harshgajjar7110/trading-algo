@@ -23,3 +23,13 @@ dependencies = [
 
 [project.optional-dependencies]
 premarket = ["yfinance>=0.2.0"]  # Required for pre-market data fetching (GIFT Nifty, US markets)
+
+[project.scripts]
+start = "run_services:main"
+
+[tool.uv]
+dev-dependencies = [
+    "fastapi>=0.104.0",
+    "uvicorn[standard]>=0.24.0",
+    "websockets>=12.0",
+]

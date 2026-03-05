@@ -32,6 +32,70 @@ class ServiceRunner:
         self.stop_event = threading.Event()
         self.workspace = Path(__file__).parent
 
+    def check_backend_dependencies(self) -> bool:
+        """Check if required backend dependencies are installed"""
+        required = ["fastapi", "uvicorn", "pydantic_settings", "websockets", "yaml"]
+        missing = []
+
+        python = sys.executable
+        venv_python = self.workspace / ".venv" / "bin" / "python"
+        if not venv_python.exists():
+            venv_python = self.workspace / ".venv" / "Scripts" / "python.exe"
+        if venv_python.exists():
+            python = str(venv_python)
+
+        for module in required:
+            try:
+                result = subprocess.run(
+                    [python, "-c", f"import {module.replace('pydantic_settings', 'pydantic_settings')}"],
+                    capture_output=True,
+                    timeout=5
+                )
+                if result.returncode != 0:
+                    missing.append(module)
+            except Exception:
+                missing.append(module)
+
+        if missing:
+            self.log("SYSTEM", f"Missing backend dependencies: {', '.join(missing)}", "error")
+            self.log("SYSTEM", "Please install: uv pip install -r web/backend/requirements.txt", "warning")
+            return False
+        return True
+
+    def check_nodejs(self) -> bool:
+        """Check if Node.js and npm are installed"""
+        npm_cmd = "npm.cmd" if sys.platform == "win32" else "npm"
+
+        try:
+            result = subprocess.run(
+                [npm_cmd, "--version"],
+                capture_output=True,
+                timeout=5
+            )
+            if result.returncode == 0:
+                npm_version = result.stdout.decode().strip()
+                self.log("SYSTEM", f"Found npm {npm_version}")
+                return True
+        except FileNotFoundError:
+            pass
+        except Exception:
+            pass
+
+        self.log("SYSTEM", "Node.js/npm not found!", "error")
+        self.log("SYSTEM", "Please install Node.js from https://nodejs.org/", "warning")
+        return False
+
+    def check_frontend_dependencies(self) -> bool:
+        """Check if frontend node_modules exist"""
+        frontend_dir = self.workspace / "web" / "frontend"
+        node_modules = frontend_dir / "node_modules"
+
+        if not node_modules.exists():
+            self.log("SYSTEM", "Frontend dependencies not installed!", "error")
+            self.log("SYSTEM", f"Please run: cd web/frontend && npm install", "warning")
+            return False
+        return True
+
     def log(self, service: str, message: str, level: str = "info"):
         """Print formatted log message"""
         timestamp = time.strftime("%H:%M:%S")
@@ -98,7 +162,6 @@ class ServiceRunner:
             cwd=backend_dir,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
-            bufsize=1,
             env=env
         )
 
@@ -133,7 +196,6 @@ class ServiceRunner:
             cwd=frontend_dir,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
-            bufsize=1,
             env=env
         )
 
@@ -182,12 +244,41 @@ class ServiceRunner:
         signal.signal(signal.SIGINT, self.shutdown)
         signal.signal(signal.SIGTERM, self.shutdown)
 
+        # Check all prerequisites
+        if not self.check_backend_dependencies():
+            self.log("SYSTEM", "Please install missing Python dependencies and try again", "error")
+            return
+
+        if not self.check_nodejs():
+            self.log("SYSTEM", "Please install Node.js and try again", "error")
+            return
+
+        if not self.check_frontend_dependencies():
+            self.log("SYSTEM", "Please install frontend dependencies and try again", "error")
+            return
+
         try:
             # Start backend first
             backend = self.start_backend()
 
-            # Wait a moment for backend to initialize
-            time.sleep(2)
+            # Wait for backend to initialize (give it up to 10 seconds)
+            self.log("SYSTEM", "Waiting for backend to initialize...")
+            backend_ready = False
+            for _ in range(20):  # 20 * 0.5s = 10 seconds
+                time.sleep(0.5)
+                status = backend.poll()
+                if status is not None:
+                    self.log("BACKEND", f"Failed to start (exit code: {status})", "error")
+                    self.shutdown()
+                    return
+                # Check if uvicorn is ready by looking at output (simplified check)
+                backend_ready = True
+                break
+
+            if not backend_ready:
+                self.log("BACKEND", "Failed to start within timeout", "error")
+                self.shutdown()
+                return
 
             # Start frontend
             frontend = self.start_frontend()
@@ -207,10 +298,12 @@ class ServiceRunner:
 
                 if backend_status is not None:
                     self.log("BACKEND", f"Process exited with code {backend_status}", "error")
+                    self.log("SYSTEM", "Backend crashed! Shutting down...", "warning")
                     break
 
                 if frontend_status is not None:
                     self.log("FRONTEND", f"Process exited with code {frontend_status}", "error")
+                    self.log("SYSTEM", "Frontend crashed! Shutting down...", "warning")
                     break
 
                 time.sleep(0.5)

@@ -49,13 +49,27 @@ const CONFIG_CATEGORIES: ConfigCategory[] = [
     ],
   },
   {
-    id: 'strike-selection',
-    title: 'Strike Selection',
+    id: 'fixed-strike-selection',
+    title: 'Fixed Strike Selection (Fallback)',
     icon: '🎯',
-    description: 'Configure strike price selection based on distance from spot',
+    description: 'Fixed strike distances used when ATR-based selection is disabled',
     fields: [
-      { key: 'pe_symbol_gap', label: 'PE Strike Distance', type: 'number', description: 'Points below current price for PE strike selection (e.g., 600 = 6 strikes for NIFTY)', min: 0, step: 50 },
-      { key: 'ce_symbol_gap', label: 'CE Strike Distance', type: 'number', description: 'Points above current price for CE strike selection (e.g., 600 = 6 strikes for NIFTY)', min: 0, step: 50 },
+      { key: 'pe_symbol_gap', label: 'PE Strike Distance', type: 'number', description: 'Points below current price for PE strike selection when ATR disabled (e.g., 1200 = 12 strikes for NIFTY)', min: 0, step: 50 },
+      { key: 'ce_symbol_gap', label: 'CE Strike Distance', type: 'number', description: 'Points above current price for CE strike selection when ATR disabled (e.g., 1200 = 12 strikes for NIFTY)', min: 0, step: 50 },
+    ],
+  },
+  {
+    id: 'atr-strike-selection',
+    title: 'ATR-Based Strike Selection',
+    icon: '📊',
+    description: 'Dynamic strike selection based on market volatility (ATR)',
+    fields: [
+      { key: 'enable_atr_strike_selection', label: 'Enable ATR Strike Selection', type: 'boolean', description: 'Enable dynamic strike selection based on ATR (volatility)' },
+      { key: 'atr_strike_min_distance', label: 'Min Strike Distance', type: 'number', description: 'Minimum strike distance in points (safety floor, e.g., 700)', min: 100, step: 50 },
+      { key: 'atr_strike_max_distance', label: 'Max Strike Distance', type: 'number', description: 'Maximum strike distance in points (safety ceiling, e.g., 2500)', min: 500, step: 50 },
+      { key: 'atr_strike_recalc_minutes', label: 'Recalc Interval (min)', type: 'number', description: 'Minutes between ATR strike distance recalculations', min: 1, max: 60, step: 1 },
+      { key: 'atr_multiplier_pe', label: 'ATR Multiplier PE', type: 'number', description: 'ATR multiplier for PE strike distance (default: 10 for ~2-3 SD)', min: 1, max: 50, step: 0.5 },
+      { key: 'atr_multiplier_ce', label: 'ATR Multiplier CE', type: 'number', description: 'ATR multiplier for CE strike distance (default: 10 for ~2-3 SD)', min: 1, max: 50, step: 0.5 },
     ],
   },
   {
@@ -130,16 +144,22 @@ const CONFIG_CATEGORIES: ConfigCategory[] = [
     ],
   },
   {
+    id: 'atr-entry-gaps',
+    title: 'ATR Dynamic Entry Gaps',
+    icon: '📈',
+    description: 'ATR-based dynamic adjustment of entry trigger thresholds',
+    fields: [
+      { key: 'enable_dynamic_gaps', label: 'Enable Dynamic Gaps', type: 'boolean', description: 'Enable ATR-based dynamic gap adjustment for entry triggers' },
+    ],
+  },
+  {
     id: 'volatility-sizing',
     title: 'Volatility-Based Sizing',
-    icon: '📊',
+    icon: '⚖️',
     description: 'Dynamic position sizing based on market volatility',
     fields: [
       { key: 'volatility_sizing', label: 'Enable Volatility Sizing', type: 'boolean', description: 'Enable automatic position size reduction in high volatility periods' },
       { key: 'high_vol_size_reduction', label: 'High Vol Reduction', type: 'number', description: 'Trade at X% of normal size in high volatility (0.5 = 50% size)', min: 0.1, max: 1, step: 0.1 },
-      { key: 'enable_dynamic_gaps', label: 'Enable Dynamic Gaps', type: 'boolean', description: 'Enable ATR-based dynamic gap adjustment for adaptive thresholds' },
-      { key: 'atr_multiplier_pe', label: 'ATR Multiplier PE', type: 'number', description: 'ATR multiplier for PE gap calculation when dynamic gaps enabled', min: 0.5, max: 20, step: 0.5 },
-      { key: 'atr_multiplier_ce', label: 'ATR Multiplier CE', type: 'number', description: 'ATR multiplier for CE gap calculation when dynamic gaps enabled', min: 0.5, max: 20, step: 0.5 },
     ],
   },
   {
@@ -219,7 +239,7 @@ export default function ConfigPage() {
   const [success, setSuccess] = useState<string | null>(null);
   const [validation, setValidation] = useState<ConfigValidationResponse | null>(null);
   const [expandedCategories, setExpandedCategories] = useState<Set<string>>(
-    () => new Set(['symbol-market', 'price-gaps', 'stop-loss'])
+    () => new Set(['symbol-market', 'fixed-strike-selection', 'atr-strike-selection', 'price-gaps', 'stop-loss'])
   );
   const [searchTerm, setSearchTerm] = useState('');
 

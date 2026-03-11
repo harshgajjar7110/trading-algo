@@ -1,6 +1,7 @@
 """
 Configuration management for the Survivor Web Backend.
 """
+
 import os
 from pathlib import Path
 from typing import Optional
@@ -10,28 +11,33 @@ from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
-    
+
     # Application
     APP_NAME: str = "Survivor Trading API"
     APP_VERSION: str = "1.0.0"
     DEBUG: bool = False
-    
+
     # Server
     HOST: str = "0.0.0.0"
     PORT: int = 8000
-    
+
     # CORS
     CORS_ORIGINS: list[str] = ["http://localhost:3000", "http://127.0.0.1:3000"]
-    
+
     # Broker settings (inherited from main project)
     BROKER_NAME: str = "zerodha"
-    
+
     # Strategy config path
-    STRATEGY_CONFIG_PATH: str = str(Path(__file__).parent.parent.parent.parent / "strategy" / "configs" / "survivor.yml")
-    
+    STRATEGY_CONFIG_PATH: str = str(
+        Path(__file__).parent.parent.parent.parent
+        / "strategy"
+        / "configs"
+        / "survivor.yml"
+    )
+
     # WebSocket
     WS_HEARTBEAT_INTERVAL: int = 30  # seconds
-    
+
     class Config:
         env_file = ".env"
         extra = "ignore"
@@ -43,40 +49,40 @@ settings = Settings()
 
 class StrategyConfig(BaseModel):
     """Strategy configuration model matching survivor.yml structure."""
-    
+
     # Core Parameters
     index_symbol: str = "NSE:NIFTY 50"
     symbol_initials: str = "NIFTY26310"
-    
+
     # Gap Parameters
     pe_gap: int = 40
     ce_gap: int = 40
     pe_reset_gap: int = 30
     ce_reset_gap: int = 30
-    
+
     # Strike Selection
     pe_symbol_gap: int = 600
     ce_symbol_gap: int = 600
-    
+
     # Position Sizing
     pe_quantity: int = 65
     ce_quantity: int = 65
-    
+
     # Risk Management
     min_price_to_sell: float = 15.0
     sell_multiplier_threshold: int = 1
-    
+
     # Reference Points
     pe_start_point: int = 0
     ce_start_point: int = 0
-    
+
     # Order Settings
     exchange: str = "NFO"
     order_type: str = "MARKET"
     product_type: str = "NRML"
     trans_type: str = "SELL"
     tag: str = "Survivor"
-    
+
     # Entry Filters
     entry_filter_type: str = "NONE"
     rsi_period: int = 14
@@ -132,10 +138,13 @@ class StrategyConfig(BaseModel):
     stop_loss_multiplier: float = 2.0
 
     # ============================================================
-    # ENHANCED: Trailing Stop
+    # ENHANCED: Trailing Stop-Loss
     # ============================================================
-    trailing_stop_enabled: bool = False
-    trailing_stop_distance: float = 0.5
+    trailing_sl_enabled: bool = False
+    trailing_sl_activation_percent: float = 30.0
+    trailing_sl_distance_percent: float = 20.0
+    trailing_sl_min_locked_percent: float = 15.0
+    trailing_sl_lock_profit: bool = True
 
     # ============================================================
     # ENHANCED: Daily Loss Limit
@@ -155,10 +164,12 @@ class StrategyConfig(BaseModel):
     atr_multiplier_ce: float = 2.0
 
     # ============================================================
-    # ENHANCED: Volatility-based Position Sizing
+    # ENHANCED: ATR-Based Strike Selection
     # ============================================================
-    volatility_sizing: bool = True
-    high_vol_size_reduction: float = 0.5
+    enable_atr_strike_selection: bool = False
+    atr_strike_min_distance: int = 700
+    atr_strike_max_distance: int = 2500
+    atr_strike_recalc_minutes: int = 15
 
     # ============================================================
     # ENHANCED: Position Initialization

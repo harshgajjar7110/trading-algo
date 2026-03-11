@@ -162,6 +162,14 @@ export interface StrategyConfig {
   atr_multiplier_ce: number;
 
   // ============================================================
+  // ENHANCED: ATR-Based Strike Selection
+  // ============================================================
+  enable_atr_strike_selection: boolean;
+  atr_strike_min_distance: number;
+  atr_strike_max_distance: number;
+  atr_strike_recalc_minutes: number;
+
+  // ============================================================
   // ENHANCED: Volatility-based Position Sizing
   // ============================================================
   volatility_sizing: boolean;

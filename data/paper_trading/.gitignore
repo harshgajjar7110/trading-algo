@@ -1,0 +1,4 @@
+# Paper trading state files
+*.json
+*.csv
+*.tmp

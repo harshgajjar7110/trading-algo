@@ -5,12 +5,16 @@ default:
   atr_multiplier_ce: 10.0
   atr_multiplier_pe: 10.0
   atr_period: 14
+  atr_strike_max_distance: 2500
+  atr_strike_min_distance: 700
+  atr_strike_recalc_minutes: 15
   ce_gap: 50
   ce_quantity: 65
   ce_reset_gap: 30
   ce_start_point: 0
   ce_symbol_gap: 1200
   ema_period: 20
+  enable_atr_strike_selection: false
   enable_dynamic_gaps: true
   enable_position_init: false
   entry_filter_type: EMA
@@ -47,7 +51,9 @@ default:
   stop_loss_multiplier: 2.0
   symbol_initials: NIFTY26317
   tag: SurvivorEnhanced
-  trailing_stop_distance: 0.5
-  trailing_stop_enabled: true
+  trailing_sl_activation_percent: 30.0
+  trailing_sl_distance_percent: 20.0
+  trailing_sl_enabled: true
+  trailing_sl_min_locked_percent: 15.0
   trans_type: SELL
   volatility_sizing: true

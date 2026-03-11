@@ -1,6 +1,7 @@
 """
 Pydantic models for API requests and responses.
 """
+
 from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Optional
@@ -10,6 +11,7 @@ from pydantic import BaseModel, Field
 # =============================================================================
 # Enums
 # =============================================================================
+
 
 class StrategyStatus(str, Enum):
     STOPPED = "STOPPED"
@@ -36,8 +38,10 @@ class TransactionType(str, Enum):
 # Strategy Models
 # =============================================================================
 
+
 class StrategyState(BaseModel):
     """Current state of the running strategy."""
+
     status: StrategyStatus
     nifty_pe_last_value: Optional[float] = None
     nifty_ce_last_value: Optional[float] = None
@@ -53,11 +57,13 @@ class StrategyState(BaseModel):
 
 class StrategyStartRequest(BaseModel):
     """Request to start the strategy."""
+
     config_override: Optional[Dict[str, Any]] = None
 
 
 class StrategyStartResponse(BaseModel):
     """Response after starting strategy."""
+
     success: bool
     message: str
     status: StrategyStatus
@@ -65,6 +71,7 @@ class StrategyStartResponse(BaseModel):
 
 class StrategyStopResponse(BaseModel):
     """Response after stopping strategy."""
+
     success: bool
     message: str
     status: StrategyStatus
@@ -74,8 +81,10 @@ class StrategyStopResponse(BaseModel):
 # Configuration Models
 # =============================================================================
 
+
 class StrategyConfigUpdate(BaseModel):
     """Partial configuration update."""
+
     # Core Parameters
     index_symbol: Optional[str] = None
     symbol_initials: Optional[str] = None
@@ -152,10 +161,13 @@ class StrategyConfigUpdate(BaseModel):
     stop_loss_multiplier: Optional[float] = None
 
     # ============================================================
-    # ENHANCED: Trailing Stop
+    # ENHANCED: Trailing Stop-Loss
     # ============================================================
-    trailing_stop_enabled: Optional[bool] = None
-    trailing_stop_distance: Optional[float] = None
+    trailing_sl_enabled: Optional[bool] = None
+    trailing_sl_activation_percent: Optional[float] = None
+    trailing_sl_distance_percent: Optional[float] = None
+    trailing_sl_min_locked_percent: Optional[float] = None
+    trailing_sl_lock_profit: Optional[bool] = None
 
     # ============================================================
     # ENHANCED: Daily Loss Limit
@@ -173,6 +185,14 @@ class StrategyConfigUpdate(BaseModel):
     enable_dynamic_gaps: Optional[bool] = None
     atr_multiplier_pe: Optional[float] = None
     atr_multiplier_ce: Optional[float] = None
+
+    # ============================================================
+    # ENHANCED: ATR-Based Strike Selection
+    # ============================================================
+    enable_atr_strike_selection: Optional[bool] = None
+    atr_strike_min_distance: Optional[int] = None
+    atr_strike_max_distance: Optional[int] = None
+    atr_strike_recalc_minutes: Optional[int] = None
 
     # ============================================================
     # ENHANCED: Volatility-based Position Sizing
@@ -193,6 +213,7 @@ class StrategyConfigUpdate(BaseModel):
 
 class ConfigValidationResponse(BaseModel):
     """Response for configuration validation."""
+
     valid: bool
     errors: List[str] = []
     warnings: List[str] = []
@@ -202,8 +223,10 @@ class ConfigValidationResponse(BaseModel):
 # Position Models
 # =============================================================================
 
+
 class Position(BaseModel):
     """Trading position."""
+
     symbol: str
     exchange: str
     quantity: int
@@ -217,6 +240,7 @@ class Position(BaseModel):
 
 class PositionsResponse(BaseModel):
     """Response with all positions."""
+
     positions: List[Position]
     total_pnl: float
     total_pnl_percent: float
@@ -228,8 +252,10 @@ class PositionsResponse(BaseModel):
 # Order Models
 # =============================================================================
 
+
 class Order(BaseModel):
     """Trading order."""
+
     order_id: str
     symbol: str
     exchange: str
@@ -247,12 +273,14 @@ class Order(BaseModel):
 
 class OrdersResponse(BaseModel):
     """Response with orders."""
+
     orders: List[Order]
     count: int
 
 
 class Trade(BaseModel):
     """Executed trade."""
+
     trade_id: str
     order_id: str
     symbol: str
@@ -266,6 +294,7 @@ class Trade(BaseModel):
 
 class TradesResponse(BaseModel):
     """Response with trades."""
+
     trades: List[Trade]
     count: int
 
@@ -274,8 +303,10 @@ class TradesResponse(BaseModel):
 # Market Data Models
 # =============================================================================
 
+
 class Quote(BaseModel):
     """Market quote."""
+
     symbol: str
     exchange: str
     last_price: float
@@ -293,6 +324,7 @@ class Quote(BaseModel):
 
 class NiftyData(BaseModel):
     """NIFTY index data with strategy context."""
+
     quote: Quote
     pe_reference: Optional[float] = None
     ce_reference: Optional[float] = None
@@ -304,8 +336,10 @@ class NiftyData(BaseModel):
 # Account Models
 # =============================================================================
 
+
 class Funds(BaseModel):
     """Account funds."""
+
     equity: float
     available_cash: float
     used_margin: float
@@ -316,8 +350,10 @@ class Funds(BaseModel):
 # WebSocket Models
 # =============================================================================
 
+
 class WSMessage(BaseModel):
     """WebSocket message structure."""
+
     type: str
     data: Dict[str, Any]
     timestamp: datetime = Field(default_factory=datetime.utcnow)
@@ -325,6 +361,7 @@ class WSMessage(BaseModel):
 
 class PriceUpdate(BaseModel):
     """Price update for WebSocket."""
+
     symbol: str
     last_price: float
     change: Optional[float] = None
@@ -333,6 +370,7 @@ class PriceUpdate(BaseModel):
 
 class OrderUpdate(BaseModel):
     """Order update for WebSocket."""
+
     order_id: str
     symbol: str
     status: OrderStatus
@@ -346,8 +384,10 @@ class OrderUpdate(BaseModel):
 # Error Models
 # =============================================================================
 
+
 class APIError(BaseModel):
     """API error response."""
+
     code: str
     message: str
     details: Optional[Dict[str, Any]] = None
@@ -355,12 +395,14 @@ class APIError(BaseModel):
 
 class HTTPError(BaseModel):
     """HTTP error response."""
+
     error: APIError
 
 
 # =============================================================================
 # Payoff Analysis Models
 # =============================================================================
+
 
 class OptionType(str, Enum):
     CALL = "CE"
@@ -369,6 +411,7 @@ class OptionType(str, Enum):
 
 class PayoffPoint(BaseModel):
     """A single point on the payoff curve."""
+
     underlying_price: float
     pnl: float
     pnl_percent: float
@@ -376,6 +419,7 @@ class PayoffPoint(BaseModel):
 
 class PositionPayoff(BaseModel):
     """Payoff analysis for a single position."""
+
     symbol: str
     option_type: OptionType  # CE or PE
     strike_price: float
@@ -393,9 +437,12 @@ class PositionPayoff(BaseModel):
 
 class PortfolioPayoff(BaseModel):
     """Combined payoff analysis for all positions."""
+
     positions: List[PositionPayoff]
     combined_payoff_curve: List[PayoffPoint]  # Combined P&L
-    combined_breakeven_points: List[float]  # All breakeven points for combined positions
+    combined_breakeven_points: List[
+        float
+    ]  # All breakeven points for combined positions
     total_max_profit: Optional[float] = None
     total_max_loss: Optional[float] = None
     current_nifty_price: float
@@ -408,8 +455,10 @@ class PortfolioPayoff(BaseModel):
 # Greeks Models
 # =============================================================================
 
+
 class PositionGreeks(BaseModel):
     """Greeks for a single option position."""
+
     symbol: str
     option_type: str  # CE or PE
     strike: float
@@ -426,6 +475,7 @@ class PositionGreeks(BaseModel):
 
 class PortfolioGreeks(BaseModel):
     """Aggregate Greeks for the entire portfolio."""
+
     delta: float
     gamma: float
     theta: float
@@ -435,6 +485,7 @@ class PortfolioGreeks(BaseModel):
 
 class GreeksInterpretation(BaseModel):
     """Human-readable interpretations of portfolio Greeks."""
+
     delta: str
     gamma: str
     theta: str
@@ -444,6 +495,7 @@ class GreeksInterpretation(BaseModel):
 
 class GreeksResponse(BaseModel):
     """Response containing portfolio Greeks calculation."""
+
     positions: List[PositionGreeks]
     portfolio: PortfolioGreeks
     interpretation: GreeksInterpretation
@@ -453,6 +505,7 @@ class GreeksResponse(BaseModel):
 
 class ScenarioResult(BaseModel):
     """Single scenario result for Greeks analysis."""
+
     price_change_pct: float
     price_change_points: float
     volatility_change: float
@@ -463,6 +516,7 @@ class ScenarioResult(BaseModel):
 
 class ScenarioAnalysis(BaseModel):
     """Scenario analysis results for portfolio Greeks."""
+
     current_greeks: PortfolioGreeks
     scenarios: List[ScenarioResult]
     underlying_price: float
@@ -473,8 +527,10 @@ class ScenarioAnalysis(BaseModel):
 # Visual Engine Models
 # =============================================================================
 
+
 class FilterType(str, Enum):
     """Types of entry filters."""
+
     RSI = "RSI"
     EMA = "EMA"
     ADX = "ADX"
@@ -484,6 +540,7 @@ class FilterType(str, Enum):
 
 class FilterStatusType(str, Enum):
     """Status of a filter check."""
+
     PASS = "PASS"
     FAIL = "FAIL"
     PENDING = "PENDING"
@@ -493,6 +550,7 @@ class FilterStatusType(str, Enum):
 
 class PredictionStatus(str, Enum):
     """Status of entry prediction."""
+
     READY = "READY"
     WAITING = "WAITING"
     BLOCKED = "BLOCKED"
@@ -501,6 +559,7 @@ class PredictionStatus(str, Enum):
 
 class TrendDirection(str, Enum):
     """Market trend direction."""
+
     BULLISH = "BULLISH"
     BEARISH = "BEARISH"
     NEUTRAL = "NEUTRAL"
@@ -508,6 +567,7 @@ class TrendDirection(str, Enum):
 
 class VolatilityRegime(str, Enum):
     """Volatility classification."""
+
     LOW = "LOW"
     NORMAL = "NORMAL"
     HIGH = "HIGH"
@@ -515,6 +575,7 @@ class VolatilityRegime(str, Enum):
 
 class SignalType(str, Enum):
     """Type of trading signal."""
+
     ENTRY = "ENTRY"
     REJECTION = "REJECTION"
     EXIT = "EXIT"
@@ -522,6 +583,7 @@ class SignalType(str, Enum):
 
 class FilterStatus(BaseModel):
     """Status of an individual entry filter."""
+
     name: str
     type: FilterType
     enabled: bool
@@ -535,6 +597,7 @@ class FilterStatus(BaseModel):
 
 class EntryPrediction(BaseModel):
     """Prediction for entry on a specific side (PE/CE)."""
+
     side: str  # "PE" or "CE"
     status: PredictionStatus
     current_price: Optional[float] = None
@@ -548,6 +611,7 @@ class EntryPrediction(BaseModel):
 
 class EntrySignal(BaseModel):
     """A trading signal (entry, rejection, or exit)."""
+
     timestamp: datetime
     side: str  # "PE" or "CE"
     type: SignalType
@@ -559,6 +623,7 @@ class EntrySignal(BaseModel):
 
 class GapAssessment(BaseModel):
     """Gap risk assessment."""
+
     can_trade: bool
     message: str
     gap_percent: Optional[float] = None
@@ -567,6 +632,7 @@ class GapAssessment(BaseModel):
 
 class MarketContext(BaseModel):
     """Current market context."""
+
     nifty_price: Optional[float] = None
     trend: TrendDirection = TrendDirection.NEUTRAL
     volatility_regime: VolatilityRegime = VolatilityRegime.NORMAL
@@ -576,6 +642,7 @@ class MarketContext(BaseModel):
 
 class DailyStats(BaseModel):
     """Daily trading statistics."""
+
     trades_taken: int = 0
     trades_rejected: int = 0
     pnl: float = 0.0
@@ -584,6 +651,7 @@ class DailyStats(BaseModel):
 
 class StrategyVisualState(BaseModel):
     """Complete visual state for the strategy dashboard."""
+
     # Algo Status
     is_running: bool
     uptime_seconds: Optional[float] = None
@@ -612,6 +680,7 @@ class StrategyVisualState(BaseModel):
 
 class VisualStateResponse(BaseModel):
     """API response for visual state endpoint."""
+
     success: bool
     data: Optional[StrategyVisualState] = None
     error: Optional[str] = None

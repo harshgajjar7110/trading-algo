@@ -92,7 +92,7 @@ class SurvivorStrategy:
         self.order_tracker = order_tracker  # Store OrderTracker
         self.broker.download_instruments()
         self.instruments = self.broker.get_instruments()
-        self.instruments = self.instruments[self.instruments['symbol'].str.contains(self.symbol_initials)]
+        self.instruments = self.instruments[self.instruments['symbol'].str.startswith(self.symbol_initials)]
 
         if self.instruments.shape[0] == 0:
             logger.error(f"No instruments found for {self.symbol_initials}")
@@ -362,7 +362,7 @@ class SurvivorStrategy:
             
         # Filter for CE instruments to calculate strike difference 
         ce_instruments = self.instruments[
-            self.instruments['symbol'].str.contains(symbol_initials) & 
+            self.instruments['symbol'].str.startswith(symbol_initials) & 
             self.instruments['symbol'].str.endswith('CE')
         ]
         
@@ -683,7 +683,7 @@ class SurvivorStrategy:
         
         # Filter instruments for matching criteria
         df = self.instruments[
-            (self.instruments['symbol'].str.contains(self.strat_var_symbol_initials)) &
+            (self.instruments['symbol'].str.startswith(self.strat_var_symbol_initials)) &
             (self.instruments['instrument_type'] == option_type) &
             (self.instruments['segment'] == "NFO-OPT")
         ]

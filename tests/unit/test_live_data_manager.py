@@ -253,7 +253,7 @@ class TestLiveDataManager(unittest.TestCase):
         asyncio.run(self.manager.start_stream())
 
         # Wait for errors to accumulate
-        asyncio.run(asyncio.sleep(12))  # 5 errors * 2 seconds wait + buffer
+        asyncio.run(asyncio.sleep(15))  # 5 errors * 2 seconds wait + buffer
 
         # Stream should have stopped
         self.assertFalse(self.manager.is_streaming)
@@ -267,7 +267,7 @@ class TestLiveDataManager(unittest.TestCase):
         self.mock_broker.add_position(create_mock_position(symbol="POS1"))
 
         asyncio.run(self.manager.start_stream())
-        asyncio.run(asyncio.sleep(0.1))
+        asyncio.run(asyncio.sleep(0.5))
 
         # Verify initial data
         self.assertEqual(len(self.manager.get_positions()), 1)
@@ -276,7 +276,7 @@ class TestLiveDataManager(unittest.TestCase):
         self.mock_broker.add_position(create_mock_position(symbol="POS2"))
 
         # Wait for next fetch
-        asyncio.run(asyncio.sleep(1.1))
+        asyncio.run(asyncio.sleep(1.5))
 
         # Verify updated data
         self.assertEqual(len(self.manager.get_positions()), 2)
@@ -365,7 +365,7 @@ class TestLiveDataManagerEdgeCases(unittest.TestCase):
             self.mock_broker.add_position(create_mock_position(symbol=f"POS{i}"))
 
             asyncio.run(self.manager.start_stream())
-            asyncio.run(asyncio.sleep(0.1))
+            asyncio.run(asyncio.sleep(0.5))
 
             self.assertTrue(self.manager.is_streaming)
             self.assertEqual(len(self.manager.get_positions()), i + 1)

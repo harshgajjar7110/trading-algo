@@ -82,14 +82,15 @@ class SurvivorStrategy:
     PS: This will only work with Zerodha broker out of the box. For Fyers, there needs to be some straight forward changes to get quotes, place orders etc.
     """
     
-    def __init__(self, broker, config, order_tracker):
+    def __init__(self, broker, config, risk_manager, position_manager):
         # Assign config values as instance variables with 'strat_var_' prefix
         for k, v in config.items():
             setattr(self, f'strat_var_{k}', v)
         # External dependencies
         self.broker = broker
+        self.risk_manager = risk_manager
+        self.position_manager = position_manager
         self.symbol_initials = self.strat_var_symbol_initials
-        self.order_tracker = order_tracker  # Store OrderTracker
         self.broker.download_instruments()
         self.instruments = self.broker.get_instruments()
         self.instruments = self.instruments[self.instruments['symbol'].str.contains(self.symbol_initials)]
@@ -380,26 +381,21 @@ class SurvivorStrategy:
     def on_ticks_update(self, ticks):
         """
         Main strategy execution method called on each tick update
-        
-        Args:
-            ticks (dict): Market data containing 'last_price' and other tick information
-            
-        This is the core method that:
-        1. Extracts current price from tick data
-        2. Evaluates PE trading opportunities
-        3. Evaluates CE trading opportunities  
-        4. Applies reset logic for reference values
-        
-        Called externally by the main trading loop when new market data arrives
         """
         current_price = ticks['last_price'] if 'last_price' in ticks else ticks['ltp']
         
         # Update historical data for indicators
         self._update_history(current_price)
 
+        # Monitor existing positions (SL/Target check)
+        self.position_manager.on_tick(current_price)
+        
+        # Calculate current MTM loss once per tick to avoid redundant API calls
+        current_mtm = self.position_manager.get_total_mtm_loss()
+
         # Process trading opportunities for both sides
-        self._handle_pe_trade(current_price)  # Handle Put option opportunities
-        self._handle_ce_trade(current_price)  # Handle Call option opportunities
+        self._handle_pe_trade(current_price, current_mtm)  # Handle Put option opportunities
+        self._handle_ce_trade(current_price, current_mtm)  # Handle Call option opportunities
         
         # Apply reset logic to adjust reference values
         self._reset_reference_values(current_price)
@@ -423,189 +419,121 @@ class SurvivorStrategy:
             return True
         return False
 
-    def _handle_pe_trade(self, current_price):
+    def _handle_pe_trade(self, current_price, current_mtm):
         """
         Handle PE (Put) option trading logic
-        
-        Args:
-            current_price (float): Current NIFTY index price
-            
-        PE Trading Logic:
-        - Triggered when current_price > nifty_pe_last_value + pe_gap
-        - Sells PE options (benefits from upward price movement)
-        - Updates reference value after execution
-        
-        Process:
-        1. Check if upward movement exceeds gap threshold
-        2. Calculate sell multiplier based on gap magnitude
-        3. Validate multiplier doesn't breach risk limits
-        4. Find appropriate PE strike with adequate premium
-        5. Execute trade and update reference value
-        
-        Example:
-        - Reference: 24,500, Gap: 25, Current: 24,560
-        - Difference: 60, Multiplier: 60/25 = 2
-        - Sell 2x PE quantity, Update reference to 24,550
         """
         # No action needed if price hasn't moved up sufficiently
         if current_price <= self.nifty_pe_last_value:
             self._log_stable_market(current_price)
             return
 
+        # RiskManager evaluation
+        allowed, reason = self.risk_manager.evaluate("PE", current_price, current_mtm)
+        if not allowed:
+            logger.info(f"PE trade blocked by RiskManager: {reason}")
+            return
+
+        # Calculate effective gap (dynamic VIX-based)
+        effective_gap = self.risk_manager.get_effective_gap(self.strat_var_pe_gap)
+
         # Calculate price difference and check if it exceeds gap threshold
         price_diff = round(current_price - self.nifty_pe_last_value, 0)
-        if price_diff > self.strat_var_pe_gap:
+        if price_diff > effective_gap:
             # Check Entry Filter
             if not self._check_entry_filter("PE", current_price):
-                # We do NOT update the reference value here if filter fails,
-                # effectively skipping this 'gap' opportunity.
-                # OR do we update reference but skip trade?
-                # If we skip update, the gap will remain huge, and next tick will trigger again?
-                # Usually in this grid logic, if you miss a level, you might want to skip it entirely
-                # or wait.
-                # Let's simple LOG and RETURN. The reference value stays same.
-                # Next tick, if condition persists, it will try again.
-                # Ideally, if filter blocks, we treat it as "market moved but not safe to enter".
                 return
 
             # Calculate multiplier for position sizing
-            sell_multiplier = int(price_diff / self.strat_var_pe_gap)
+            sell_multiplier = int(price_diff / effective_gap)
             
             # Risk check: Ensure multiplier doesn't exceed threshold
             if self._check_sell_multiplier_breach(sell_multiplier):
-                logger.warning(f"Sell multiplier {sell_multiplier} breached the threshold {self.strat_var_sell_multiplier_threshold}")
                 return
 
-            # Update reference value based on executed gaps
-            self.nifty_pe_last_value += self.strat_var_pe_gap * sell_multiplier
-            
-            # Calculate total quantity to trade
+            # Find suitable PE options for spread
+            short_instrument = self._find_nifty_symbol_from_gap("PE", current_price, gap=self.strat_var_pe_symbol_gap)
+            if not short_instrument:
+                logger.warning("No suitable short instrument found for PE")
+                return
+
+            spread_cfg = getattr(self, 'strat_var_spread', {})
+            hedge_gap = spread_cfg.get('pe_hedge_gap', 300)
+            hedge_instrument = self._find_nifty_symbol_from_gap("PE", current_price, gap=self.strat_var_pe_symbol_gap + hedge_gap)
+            if not hedge_instrument:
+                logger.warning("No suitable hedge instrument found for PE")
+                return
+
+            # Execute the spread trade
             total_quantity = sell_multiplier * self.strat_var_pe_quantity
-
-            # Find suitable PE option with adequate premium
-            temp_gap = self.strat_var_pe_symbol_gap
-            while True:
-                # Find PE instrument at specified gap from current price
-                instrument = self._find_nifty_symbol_from_gap("PE", current_price, gap=temp_gap)
-                if not instrument:
-                    logger.warning("No suitable instrument found for PE with gap %s", temp_gap)
-                    return 
-                
-                # Get current quote for the selected instrument
-                if ":" not in instrument['symbol']:
-                    symbol_code = self.strat_var_exchange + ":" + instrument['symbol']
-                else:
-                    symbol_code = instrument['symbol']
-                quote = self.broker.get_quote(symbol_code)
-                
-                # Check if premium meets minimum threshold
-                if quote.last_price < self.strat_var_min_price_to_sell:
-                    logger.info(f"Last price {quote.last_price} is less than min price to sell {self.strat_var_min_price_to_sell}")
-                    # Try closer strike if premium is too low
-                    temp_gap -= self.lot_size
-                    continue
-                    
-                # Execute the trade
-                logger.info(f"Execute PE sell @ {instrument['symbol']} × {total_quantity}, Market Price")
-                self._place_order(
-                    symbol=instrument['symbol'],
-                    quantity=total_quantity,
-                    entry_price=quote.last_price,
-                    index_price=current_price,
-                    gap_level=sell_multiplier,
-                    filter_type="PE Gap Level"
-                )
-                
-                # Set reset flag to enable reset logic
+            spread = self.position_manager.open_spread(
+                "PE", short_instrument['symbol'], hedge_instrument['symbol'], 
+                total_quantity, current_price, self.strat_var_min_price_to_sell
+            )
+            
+            if spread:
+                # Update reference value and risk counters
+                self.nifty_pe_last_value += effective_gap * sell_multiplier
                 self.pe_reset_gap_flag = 1
-                break
+                self.risk_manager.increment_trade_count()
 
-    def _handle_ce_trade(self, current_price):
+    def _handle_ce_trade(self, current_price, current_mtm):
         """
         Handle CE (Call) option trading logic
-        
-        Args:
-            current_price (float): Current NIFTY index price
-            
-        CE Trading Logic:
-        - Triggered when current_price < nifty_ce_last_value - ce_gap
-        - Sells CE options (benefits from downward price movement)
-        - Updates reference value after execution
-        
-        Process:
-        1. Check if downward movement exceeds gap threshold
-        2. Calculate sell multiplier based on gap magnitude
-        3. Validate multiplier doesn't breach risk limits
-        4. Find appropriate CE strike with adequate premium
-        5. Execute trade and update reference value
-        
-        Example:
-        - Reference: 24,500, Gap: 25, Current: 24,440
-        - Difference: 60, Multiplier: 60/25 = 2
-        - Sell 2x CE quantity, Update reference to 24,450
         """
         # No action needed if price hasn't moved down sufficiently
         if current_price >= self.nifty_ce_last_value:
             self._log_stable_market(current_price)
             return
 
+        # RiskManager evaluation
+        allowed, reason = self.risk_manager.evaluate("CE", current_price, current_mtm)
+        if not allowed:
+            logger.info(f"CE trade blocked by RiskManager: {reason}")
+            return
+
+        # Calculate effective gap (dynamic VIX-based)
+        effective_gap = self.risk_manager.get_effective_gap(self.strat_var_ce_gap)
+
         # Calculate price difference and check if it exceeds gap threshold
         price_diff = round(self.nifty_ce_last_value - current_price, 0)  
-        if price_diff > self.strat_var_ce_gap:
+        if price_diff > effective_gap:
             # Check Entry Filter
             if not self._check_entry_filter("CE", current_price):
                 return
 
             # Calculate multiplier for position sizing
-            sell_multiplier = int(price_diff / self.strat_var_ce_gap)
+            sell_multiplier = int(price_diff / effective_gap)
             
             # Risk check: Ensure multiplier doesn't exceed threshold
             if self._check_sell_multiplier_breach(sell_multiplier):
-                logger.warning(f"Sell multiplier {sell_multiplier} breached the threshold {self.strat_var_sell_multiplier_threshold}")
                 return
 
-            # Update reference value based on executed gaps
-            self.nifty_ce_last_value -= self.strat_var_ce_gap * sell_multiplier
-            
-            # Calculate total quantity to trade
-            total_quantity = sell_multiplier * self.strat_var_ce_quantity
+            # Find suitable CE options for spread
+            short_instrument = self._find_nifty_symbol_from_gap("CE", current_price, gap=self.strat_var_ce_symbol_gap)
+            if not short_instrument:
+                logger.warning("No suitable short instrument found for CE")
+                return
 
-            # Find suitable CE option with adequate premium
-            temp_gap = self.strat_var_ce_symbol_gap 
-            while True:
-                # Find CE instrument at specified gap from current price
-                instrument = self._find_nifty_symbol_from_gap("CE", current_price, gap=temp_gap)
-                if not instrument:
-                    logger.warning("No suitable instrument found for CE with gap %s", temp_gap)
-                    return
-                    
-                # Get current quote for the selected instrument
-                if ":" not in instrument['symbol']:
-                    symbol_code = self.strat_var_exchange + ":" + instrument['symbol']
-                else:
-                    symbol_code = instrument['symbol']
-                quote = self.broker.get_quote(symbol_code)
-                # Check if premium meets minimum threshold
-                if quote.last_price < self.strat_var_min_price_to_sell:
-                    logger.info(f"Last price {quote.last_price} is less than min price to sell {self.strat_var_min_price_to_sell}, trying next strike")
-                    # Try closer strike if premium is too low
-                    temp_gap -= self.lot_size
-                    continue
-                    
-                # Execute the trade
-                logger.info(f"Execute CE sell @ {instrument['symbol']} × {total_quantity}, Market Price")
-                self._place_order(
-                    symbol=instrument['symbol'],
-                    quantity=total_quantity,
-                    entry_price=quote.last_price,
-                    index_price=current_price,
-                    gap_level=sell_multiplier,
-                    filter_type="CE Gap Level"
-                )
-                
-                # Set reset flag to enable reset logic
+            spread_cfg = getattr(self, 'strat_var_spread', {})
+            hedge_gap = spread_cfg.get('ce_hedge_gap', 300)
+            hedge_instrument = self._find_nifty_symbol_from_gap("CE", current_price, gap=self.strat_var_ce_symbol_gap + hedge_gap)
+            if not hedge_instrument:
+                logger.warning("No suitable hedge instrument found for CE")
+                return
+
+            # Execute the spread trade
+            total_quantity = sell_multiplier * self.strat_var_ce_quantity
+            spread = self.position_manager.open_spread(
+                "CE", short_instrument['symbol'], hedge_instrument['symbol'], 
+                total_quantity, current_price, self.strat_var_min_price_to_sell
+            )
+            
+            if spread:
+                # Update reference value and risk counters
+                self.nifty_ce_last_value -= effective_gap * sell_multiplier
                 self.ce_reset_gap_flag = 1
-                break
+                self.risk_manager.increment_trade_count()
 
     def _reset_reference_values(self, current_price):
         """
@@ -707,216 +635,9 @@ class SurvivorStrategy:
         best = df.sort_values('target_strike_diff').iloc[0]
         return best.to_dict()
 
-    def _find_price_eligible_symbol(self, option_type):
-        """
-        Find an option symbol that meets premium requirements
-        
-        Args:
-            option_type (str): 'PE' or 'CE'
-            
-        Returns:
-            dict: Instrument details for eligible option, or None if none found
-            
-        This method iteratively searches for options that:
-        1. Meet the gap criteria
-        2. Have premium above minimum threshold
-        3. Are liquid and tradeable
-        
-        Note: This method appears to have some issues and may not be actively used
-        in the current implementation. The main trading methods use inline logic instead.
-        """
-        # Get initial gap based on option type
-        temp_gap = self.strat_var_pe_symbol_gap if option_type == "PE" else self.strat_var_ce_symbol_gap
-        
-        while True:
-            # Get current market price
-            ltp = self._nifty_quote().last_price
-            
-            # Find instrument at current gap
-            instrument = self._find_nifty_symbol_from_gap(
-                self.instruments, self.strat_var_symbol_initials, temp_gap, option_type, ltp, self.lot_size
-            )
-            
-            if instrument is None:
-                return None
-                
-            # Check if premium meets minimum threshold
-            symbol_code = f"{self.strat_var_exchange}:{instrument['symbol']}"
-            price = float(self.broker.get_quote(symbol_code).last_price)
-            
-            if price < self.strat_var_min_price_to_sell:
-                # Try closer strike if premium too low
-                temp_gap -= self.lot_size
-            else:
-                return instrument
-
-    def _place_order(self, symbol, quantity, entry_price=None, index_price=None, gap_level=None, filter_type=None):
-        """
-        Execute order placement through the broker
-        
-        Args:
-            symbol (str): Trading symbol for the option
-            quantity (int): Number of lots/shares to trade
-            entry_price (float, optional): Estimated entry price for reference
-            index_price (float, optional): Underlying index price for reference
-            gap_level (int, optional): The gap multiplier level
-            filter_type (str, optional): The gap/filter type string
-            
-        Process:
-        1. Place market order through broker interface
-        2. Log order details
-        3. Track order in order management system
-        4. Handle order failures gracefully
-        
-        Order Parameters:
-        - Transaction Type: From configuration (typically SELL)
-        - Order Type: From configuration (typically MARKET)
-        - Exchange: From configuration (typically NFO)
-        - Product: From configuration (NRML/MIS)
-        - Variety: Always REGULAR
-        - Tag: "Survivor" for identification
-        """
-        # Place order through broker interface
-        if self.strat_var_exchange == "NFO":
-            exchange = Exchange.NFO
-
-        logger.info(f"Constructing OrderRequest: symbol={symbol}, qty={quantity}, type=SELL, market=MARKET")
-
-        req = OrderRequest(
-                symbol=symbol, exchange=exchange, transaction_type=TransactionType.SELL,
-                quantity=quantity, product_type=ProductType.MARGIN, order_type=OrderType.MARKET,
-                price=0, tag=self.strat_var_tag
-            )
-        
-        try:
-            order_resp = self.broker.place_order(req)
-            order_status = order_resp.status
-            logger.debug(f"Order placement response: {order_resp}")
-            order_id = order_resp.order_id
-    
-            # Handle order placement failure
-            if order_id == -1 or order_status == "error":
-                logger.error(f"Order placement failed for {symbol} × {quantity}, Market Price")
-                exit()
-                return
-
-            # Note: In a real scenario, we should verify the order state (e.g. FILLED) 
-            # via a separate status check before tracking it as a risk. 
-            # For now, we assume successful submission implies potential risk.
-                
-            logger.info(f"Placing order for {symbol} × {quantity}, Market Price")
-            
-            # Track the order using OrderTracker
-            from datetime import datetime
-            order_details = {
-                "order_id": order_id,
-                "symbol": symbol,
-                "transaction_type": self.strat_var_trans_type,
-                "quantity": quantity,
-                "price": None,  # Market order execution price is unknown at this sync point
-                "entry_price": entry_price, # Store reference price for Hard Deck
-                "timestamp": datetime.now().isoformat(),
-            }
-            
-            # Add to order tracking system
-            if self.order_tracker:
-                self.order_tracker.add_order(order_details)
-            
-            # Log order placement for strategy tracking
-            logger.info(f"Survivor order tracked: {order_id} - {self.strat_var_trans_type} {symbol} × {quantity} (Ref: {entry_price})")
-
-            # ------------------------------------------------------------------
-            # HARD DECK IMPLEMENTATION: GTT OCO (SL + Target)
-            # ------------------------------------------------------------------
-            gtt_status = "Skipped"
-            # Immediately place a GTT OCO order if entry_price is available
-            if entry_price and entry_price > 0:
-                try:
-                    self._place_gtt_oco(symbol, quantity, entry_price)
-                    gtt_status = "Success"
-                except Exception as e:
-                    gtt_status = f"Failed: {str(e)}"
-                    logger.error(f"GTT OCO Failed: {e}")
-
-            # Construct Entry Condition String
-            # e.g. "PE Gap Level 1 + EMA"
-            entry_condition = f"{filter_type} {gap_level}" if filter_type and gap_level else "Unknown"
-            if self.strat_var_entry_filter_type != "NONE":
-                entry_condition += f" + {self.strat_var_entry_filter_type}"
-
-            # Structured JSON Logging
-            self._log_trade_to_file({
-                "order_id": str(order_id),
-                "symbol": symbol,
-                "transaction_type": self.strat_var_trans_type,
-                "quantity": quantity,
-                "entry_price_ref": entry_price,
-                "index_price": index_price,
-                "entry_condition": entry_condition,
-                "gtt_status": gtt_status,
-                "indicators": self.last_indicators,
-                "timestamp": datetime.now().isoformat()
-            })
-
-        except Exception as e:
-            logger.error(f"Exception during order placement: {e}")
-            exit()
-
-    def _log_trade_to_file(self, trade_data):
-        """Append trade details to a JSONL file for analysis."""
-        try:
-            log_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "artifacts")
-            if not os.path.exists(log_dir):
-                os.makedirs(log_dir)
-
-            log_file = os.path.join(log_dir, "survivor_trades.jsonl")
-
-            with open(log_file, "a") as f:
-                f.write(json.dumps(trade_data) + "\n")
-
-            logger.info(f"Trade logged to {log_file}")
-
-        except Exception as e:
-            logger.error(f"Failed to log trade to JSON: {e}")
-
-    def _place_gtt_oco(self, symbol, quantity, entry_price):
-        """
-        Place a GTT OCO (One Cancels Other) order for SL and Target.
-        Logic:
-        - Stop Loss: 30% increase in price (since we sold).
-        - Profit Target: 60% decrease in price.
-        """
-        # 30% Stop Loss (Price rises 30%)
-        sl_trigger = round(entry_price * 1.30, 1)
-        sl_limit = round(sl_trigger * 1.02, 1) # 2% buffer for execution
-
-        # 60% Profit Target (Price falls 60%)
-        target_trigger = round(entry_price * 0.40, 1) # 100% - 60% = 40% remaining
-        target_limit = round(target_trigger * 0.98, 1) # 2% buffer for execution (lower than trigger for Buy)
-
-        logger.info(f"Placing GTT OCO for {symbol}: Entry {entry_price}")
-        logger.info(f"  > SL Trigger: {sl_trigger}, Limit: {sl_limit}")
-        logger.info(f"  > Target Trigger: {target_trigger}, Limit: {target_limit}")
-
-        self.broker.place_gtt_oco_order(
-            symbol=symbol,
-            exchange=self.strat_var_exchange,
-            product="NRML",
-            transaction_type="BUY", # We sold to open, so we BUY to close
-            quantity=quantity,
-            stop_loss_trigger=sl_trigger,
-            stop_loss_limit=sl_limit,
-            target_trigger=target_trigger,
-            target_limit=target_limit,
-            tag="GTT OCO SL/Target"
-        )
-
-        logger.info(f"GTT OCO Signal Sent for {symbol}")
-
     def _log_stable_market(self, current_val):
         """
         Log current market state when no trading action is taken
-
         """
         logger.info(
             f"{self.strat_var_symbol_initials} Nifty. "
@@ -981,9 +702,8 @@ if __name__ == "__main__":
     import sys
     import argparse
     from dispatcher import DataDispatcher
-    from orders import OrderTracker
-    from strategy.survivor import SurvivorStrategy
-    # from brokers.zerodha import ZerodhaBroker
+    from risk_manager import RiskManager
+    from position_manager import PositionLifecycleManager
     from logger import logger
     from queue import Queue
     import random
@@ -1417,15 +1137,7 @@ PARAMETER GROUPS:
     
     
     # Create broker interface for market data and order execution
-    # if os.getenv("BROKER_TOTP_ENABLE") == "true":
-    #     logger.info("Using TOTP login flow")
-    #     broker = ZerodhaBroker(without_totp=False)
-    # else:
-    #     logger.info("Using normal login flow")
-    #     broker = ZerodhaBroker(without_totp=True)
     broker = BrokerGateway.from_name(os.getenv("BROKER_NAME"))
-    # Create order tracking system for position management
-    order_tracker = OrderTracker() 
     
     # Get instrument token for the underlying index
     # This token is used for websocket subscription to receive real-time price updates
@@ -1476,17 +1188,25 @@ PARAMETER GROUPS:
     broker.on_order_update = on_order_update
 
     # ==========================================================================
-    # SECTION 6: STRATEGY INITIALIZATION AND WEBSOCKET START
+    # SECTION 6: STRATEGY INITIALIZATION
     # ==========================================================================
     
-    # Start websocket connection for real-time data
+    # Initialize New Components FIRST
+    position_manager = PositionLifecycleManager(broker, config)
+    position_manager.reconcile_on_open() # Gap-open bailout
+    
+    risk_manager = RiskManager(config, broker, position_manager)
+
+    # Initialize the trading strategy
+    strategy = SurvivorStrategy(broker, config, risk_manager, position_manager)
+
+    # Start websocket connection AFTER strategy is ready
     broker.connect_websocket(on_ticks=on_ticks, on_connect=on_connect)
     broker.symbols_to_subscribe([instrument_token])
     broker.connect_order_websocket(on_order_update=on_order_update)
-    time.sleep(10)
-
-    # Initialize the trading strategy with all dependencies
-    strategy = SurvivorStrategy(broker, config, order_tracker)
+    
+    # Give some time for data to start flowing
+    time.sleep(5)
 
     # ==========================================================================
     # SECTION 7: MAIN TRADING LOOP

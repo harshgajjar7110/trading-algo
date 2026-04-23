@@ -30,7 +30,7 @@ default:
   # Option series identifier - must match current trading option series
   # Format: NIFTY + expiry date (e.g., NIFTY25807 for 25th Jan 2025, 07th strike series)
   # This identifies which specific option expiry series to trade
-  symbol_initials: "NIFTY26FEB24" # "NIFTY25807"
+  symbol_initials: "NIFTY26127" # "NIFTY25807"
   
   # ========================================================================
   # GAP PARAMETERS - TRADE TRIGGERING THRESHOLDS
@@ -146,6 +146,24 @@ default:
 
   # Tag for the orders to track orders from this strategy
   tag: "Survivor"
+
+  # ========================================================================
+  # RISK MANAGEMENT (NEW)
+  # ========================================================================
+  risk:
+    daily_loss_limit: 8000          # rupees MTM loss, halts new trades
+    max_trades_per_day: 6           # PE + CE combined
+    vix_symbol: "NSE:INDIA VIX"     # symbol for VIX quote
+    vix_baseline: 15.0              # VIX level at which gap = base_gap
+    vix_max_multiplier: 3.0         # max gap scale factor (e.g. VIX 45 -> 3x gap)
+    vix_enabled: true               # false = skip VIX fetch, use base gap always
+
+  # ========================================================================
+  # SPREAD CONFIGURATION (NEW)
+  # ========================================================================
+  spread:
+    pe_hedge_gap: 300    # points further OTM for PE hedge leg
+    ce_hedge_gap: 300    # points further OTM for CE hedge leg
 
   # ========================================================================
   # ENTRY FILTER PARAMETERS

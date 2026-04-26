@@ -250,13 +250,15 @@ class TestLiveDataManager(unittest.TestCase):
         # Make broker fail
         self.mock_broker.set_should_fail(True, "Test error")
 
-        asyncio.run(self.manager.start_stream())
+        async def run_test():
+            await self.manager.start_stream()
 
-        # Wait for errors to accumulate
-        asyncio.run(asyncio.sleep(12))  # 5 errors * 2 seconds wait + buffer
+            # Wait for errors to accumulate
+            await asyncio.sleep(12)  # 5 errors * 2 seconds wait + buffer
 
-        # Stream should have stopped
-        self.assertFalse(self.manager.is_streaming)
+            # Stream should have stopped
+            self.assertFalse(self.manager.is_streaming)
+        asyncio.run(run_test())
 
     @patch.object(LiveDataManager, "_ensure_broker")
     def test_data_updates_on_fetch(self, mock_ensure_broker):
@@ -266,20 +268,24 @@ class TestLiveDataManager(unittest.TestCase):
         # Add initial position
         self.mock_broker.add_position(create_mock_position(symbol="POS1"))
 
-        asyncio.run(self.manager.start_stream())
-        asyncio.run(asyncio.sleep(0.1))
+        async def run_test():
+            await self.manager.start_stream()
+            await asyncio.sleep(0.1)
 
-        # Verify initial data
-        self.assertEqual(len(self.manager.get_positions()), 1)
+            # Verify initial data
+            self.assertEqual(len(self.manager.get_positions()), 1)
 
-        # Add new position
-        self.mock_broker.add_position(create_mock_position(symbol="POS2"))
+            # Add new position
+            self.mock_broker.add_position(create_mock_position(symbol="POS2"))
 
-        # Wait for next fetch
-        asyncio.run(asyncio.sleep(1.1))
+            # Wait for next fetch
+            await asyncio.sleep(1.1)
 
-        # Verify updated data
-        self.assertEqual(len(self.manager.get_positions()), 2)
+            # Verify updated data
+            self.assertEqual(len(self.manager.get_positions()), 2)
+
+            await self.manager.stop_stream()
+        asyncio.run(run_test())
 
         # Clean up
         asyncio.run(self.manager.stop_stream())
@@ -361,21 +367,23 @@ class TestLiveDataManagerEdgeCases(unittest.TestCase):
         """Test multiple start/stop cycles."""
         mock_ensure_broker.return_value = self.mock_broker
 
-        for i in range(3):
-            self.mock_broker.add_position(create_mock_position(symbol=f"POS{i}"))
+        async def run_test():
+            for i in range(3):
+                self.mock_broker.add_position(create_mock_position(symbol=f"POS{i}"))
 
-            asyncio.run(self.manager.start_stream())
-            asyncio.run(asyncio.sleep(0.1))
+                await self.manager.start_stream()
+                await asyncio.sleep(0.1)
 
-            self.assertTrue(self.manager.is_streaming)
-            self.assertEqual(len(self.manager.get_positions()), i + 1)
+                self.assertTrue(self.manager.is_streaming)
+                self.assertEqual(len(self.manager.get_positions()), 1)
 
-            asyncio.run(self.manager.stop_stream())
+                await self.manager.stop_stream()
 
-            self.assertFalse(self.manager.is_streaming)
-            self.assertEqual(len(self.manager.get_positions()), 0)
+                self.assertFalse(self.manager.is_streaming)
+                self.assertEqual(len(self.manager.get_positions()), 0)
 
-            self.mock_broker.clear_positions()
+                self.mock_broker.clear_positions()
+        asyncio.run(run_test())
 
 
 def run_tests():
